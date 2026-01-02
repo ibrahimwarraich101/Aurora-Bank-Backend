@@ -13,13 +13,15 @@ app.use(express.json());
 const customerRoutes = require("./routes/customerRoutes");
 const accountRoutes = require("./routes/accountRoutes");
 const transactionRoutes = require("./routes/transactionRoutes");
-const dashboardRoutes = require("./routes/dashboardRoutes"); // NEW
+const dashboardRoutes = require("./routes/dashboardRoutes");
+const auditLogRoutes = require("./routes/auditLogRoutes"); 
 
 // Assign routes
 app.use("/customers", customerRoutes);
 app.use("/accounts", accountRoutes);
 app.use("/transactions", transactionRoutes);
-app.use("/dashboard", dashboardRoutes); // NEW
+app.use("/dashboard", dashboardRoutes);
+app.use("/audit-logs", auditLogRoutes); 
 
 // Test server
 app.get("/", (req, res) => res.send("CBS Backend running!"));

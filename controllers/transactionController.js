@@ -1,8 +1,19 @@
 const pool = require("../db");
 const TransactionModel = require("../models/transactionModel");
-const AuditLogModel = require("../models/auditLogModel");
 
 const TransactionController = {
+  // NEW: Get all transactions
+  async getAllTransactions(req, res) {
+    try {
+      const [transactions] = await pool.query(
+        "SELECT * FROM Transaction ORDER BY DateTime DESC"
+      );
+      res.json(transactions);
+    } catch (err) {
+      res.status(500).json({ success: false, error: err.message });
+    }
+  },
+
   // Transfer money between two accounts
   async transfer(req, res) {
     const { FromAccount, ToAccount, Amount } = req.body;
@@ -43,26 +54,11 @@ const TransactionController = {
         [FromAccount, ToAccount, Amount]
       );
 
-      // Log to audit
-      await conn.query(
-        "INSERT INTO AuditLog (Operation, TableAffected, User, Details) VALUES (?, ?, ?, ?)",
-        ['COMMIT', 'Transaction', 'system', `Transfer: From ${FromAccount} to ${ToAccount}, Amount: ${Amount}`]
-      );
-
       await conn.commit();
       res.json({ success: true, message: "Transfer successful" });
 
     } catch (err) {
       await conn.rollback();
-      
-      // Log rollback
-      await AuditLogModel.logOperation({
-        Operation: 'ROLLBACK',
-        TableAffected: 'Transaction',
-        User: 'system',
-        Details: `Transfer failed: From ${FromAccount} to ${ToAccount}, Amount: ${Amount}, Error: ${err.message}`
-      });
-      
       res.status(500).json({ success: false, error: err.message });
     } finally {
       conn.release();
@@ -91,12 +87,6 @@ const TransactionController = {
       // Rollback the second insert only
       await conn.query("ROLLBACK TO SAVEPOINT A");
 
-      // Log to audit
-      await conn.query(
-        "INSERT INTO AuditLog (Operation, TableAffected, User, Details) VALUES (?, ?, ?, ?)",
-        ['SAVEPOINT', 'Transaction', 'system', 'Savepoint demo: Rolled back to SAVEPOINT A']
-      );
-
       await conn.commit();
 
       res.json({ success: true, message: "Savepoint demo complete" });
@@ -106,18 +96,6 @@ const TransactionController = {
       res.status(500).json({ success: false, error: err.message });
     } finally {
       conn.release();
-    }
-  },
-
-  // Get all transactions
-  async getAllTransactions(req, res) {
-    try {
-      const [transactions] = await pool.query(
-        "SELECT * FROM Transaction ORDER BY DateTime DESC"
-      );
-      res.json({ success: true, data: transactions });
-    } catch (err) {
-      res.status(500).json({ success: false, error: err.message });
     }
   }
 };

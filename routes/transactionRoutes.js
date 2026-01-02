@@ -2,8 +2,13 @@ const express = require("express");
 const router = express.Router();
 const TransactionController = require("../controllers/transactionController");
 
-router.post("/transfer", TransactionController.transfer);
-router.get("/savepoint-demo", TransactionController.savepointDemo);
+// NEW: Get all transactions
 router.get("/", TransactionController.getAllTransactions);
+
+// Transfer money
+router.post("/transfer", TransactionController.transfer);
+
+// Savepoint demo
+router.get("/savepoint-demo", TransactionController.savepointDemo);
 
 module.exports = router;

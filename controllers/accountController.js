@@ -1,6 +1,6 @@
 const pool = require('../db');
 const AccountModel = require('../models/accountModel');
-const AuditLogModel = require('../models/auditLogModel');
+const AuditLogController = require('./auditLogController');
 
 const AccountController = {
   // Create account
@@ -9,16 +9,28 @@ const AccountController = {
       const { CustomerID, Type, Balance } = req.body;
       const accountId = await AccountModel.createAccount({ CustomerID, Type, Balance });
       
-      // Log to audit
-      await AuditLogModel.logOperation({
-        Operation: 'INSERT',
-        TableAffected: 'Account',
-        User: 'system',
-        Details: `Created ${Type} account (${accountId}) for CustomerID: ${CustomerID} with balance: ${Balance}`
+      // Log the operation
+      await AuditLogController.logOperation({
+        operation: 'INSERT',
+        table: 'Account',
+        recordId: accountId,
+        details: `New ${Type} account created with balance $${Balance}`,
+        userAction: 'CREATE_ACCOUNT',
+        status: 'SUCCESS'
       });
-    
+      
       res.json({ success: true, AccountNo: accountId });
     } catch (err) {
+      // Log the failure
+      await AuditLogController.logOperation({
+        operation: 'INSERT',
+        table: 'Account',
+        recordId: null,
+        details: `Failed to create account: ${err.message}`,
+        userAction: 'CREATE_ACCOUNT',
+        status: 'FAILED'
+      });
+      
       res.status(500).json({ success: false, error: err.message });
     }
   },
@@ -27,9 +39,9 @@ const AccountController = {
   async getAccounts(req, res) {
     try {
       const accounts = await AccountModel.getAccounts();
-      res.json({ success: true, data: accounts });
+      res.json(accounts);
     } catch (err) {
-      res.status(500).json({ success: false, error: err.message });
+      res.status(500).json({ error: err.message });
     }
   },
 
@@ -43,9 +55,7 @@ const AccountController = {
       const [account] = await connection.query("SELECT * FROM Account WHERE AccountNo = ?", [AccountNo]);
       if (account.length === 0) throw new Error("Account not found");
 
-      const oldBalance = parseFloat(account[0].Balance);
-      const newBalance = oldBalance + parseFloat(Amount);
-      
+      const newBalance = parseFloat(account[0].Balance) + parseFloat(Amount);
       await connection.query("UPDATE Account SET Balance = ? WHERE AccountNo = ?", [newBalance, AccountNo]);
 
       // Record transaction
@@ -54,10 +64,11 @@ const AccountController = {
         [AccountNo, Amount]
       );
 
-      // Log to audit
+      // Log COMMIT operation
       await connection.query(
-        "INSERT INTO AuditLog (Operation, TableAffected, User, Details) VALUES (?, ?, ?, ?)",
-        ['COMMIT', 'Account', 'system', `Deposit: Account ${AccountNo}, Amount: ${Amount}, New Balance: ${newBalance}`]
+        `INSERT INTO AuditLog (Operation, TableAffected, RecordID, Details, UserAction, Status) 
+         VALUES ('COMMIT', 'Account', ?, ?, 'DEPOSIT', 'SUCCESS')`,
+        [AccountNo, `Deposit of $${Amount}. New balance: $${newBalance.toFixed(2)}`]
       );
 
       await connection.commit();
@@ -65,13 +76,12 @@ const AccountController = {
     } catch (err) {
       await connection.rollback();
       
-      // Log rollback
-      await AuditLogModel.logOperation({
-        Operation: 'ROLLBACK',
-        TableAffected: 'Account',
-        User: 'system',
-        Details: `Deposit failed: Account ${AccountNo}, Amount: ${Amount}, Error: ${err.message}`
-      });
+      // Log ROLLBACK operation
+      await connection.query(
+        `INSERT INTO AuditLog (Operation, TableAffected, RecordID, Details, UserAction, Status) 
+         VALUES ('ROLLBACK', 'Account', ?, ?, 'DEPOSIT', 'FAILED')`,
+        [AccountNo, `Deposit failed: ${err.message}`]
+      );
       
       res.status(500).json({ success: false, error: err.message });
     } finally {
@@ -88,11 +98,9 @@ const AccountController = {
 
       const [account] = await connection.query("SELECT * FROM Account WHERE AccountNo = ?", [AccountNo]);
       if (account.length === 0) throw new Error("Account not found");
-      
-      const oldBalance = parseFloat(account[0].Balance);
-      if (oldBalance < Amount) throw new Error("Insufficient balance");
+      if (parseFloat(account[0].Balance) < Amount) throw new Error("Insufficient balance");
 
-      const newBalance = oldBalance - parseFloat(Amount);
+      const newBalance = parseFloat(account[0].Balance) - parseFloat(Amount);
       await connection.query("UPDATE Account SET Balance = ? WHERE AccountNo = ?", [newBalance, AccountNo]);
 
       await connection.query(
@@ -100,10 +108,11 @@ const AccountController = {
         [AccountNo, Amount]
       );
 
-      // Log to audit
+      // Log COMMIT operation
       await connection.query(
-        "INSERT INTO AuditLog (Operation, TableAffected, User, Details) VALUES (?, ?, ?, ?)",
-        ['COMMIT', 'Account', 'system', `Withdraw: Account ${AccountNo}, Amount: ${Amount}, New Balance: ${newBalance}`]
+        `INSERT INTO AuditLog (Operation, TableAffected, RecordID, Details, UserAction, Status) 
+         VALUES ('COMMIT', 'Account', ?, ?, 'WITHDRAW', 'SUCCESS')`,
+        [AccountNo, `Withdrawal of $${Amount}. New balance: $${newBalance.toFixed(2)}`]
       );
 
       await connection.commit();
@@ -111,19 +120,47 @@ const AccountController = {
     } catch (err) {
       await connection.rollback();
       
-      // Log rollback
-      await AuditLogModel.logOperation({
-        Operation: 'ROLLBACK',
-        TableAffected: 'Account',
-        User: 'system',
-        Details: `Withdraw failed: Account ${AccountNo}, Amount: ${Amount}, Error: ${err.message}`
-      });
+      // Log ROLLBACK operation
+      await connection.query(
+        `INSERT INTO AuditLog (Operation, TableAffected, RecordID, Details, UserAction, Status) 
+         VALUES ('ROLLBACK', 'Account', ?, ?, 'WITHDRAW', 'FAILED')`,
+        [AccountNo, `Withdrawal failed: ${err.message}`]
+      );
       
       res.status(500).json({ success: false, error: err.message });
     } finally {
       connection.release();
     }
+  },
+  async deleteAccount(req, res) {
+  const { id } = req.params;
+  try {
+    await AccountModel.deleteAccount(id);
+
+    await AuditLogController.logOperation({
+      operation: 'DELETE',
+      table: 'Account',
+      recordId: id,
+      details: `Account ${id} deleted`,
+      userAction: 'DELETE_ACCOUNT',
+      status: 'SUCCESS'
+    });
+
+    res.json({ success: true });
+  } catch (err) {
+    await AuditLogController.logOperation({
+      operation: 'DELETE',
+      table: 'Account',
+      recordId: id,
+      details: `Failed to delete account: ${err.message}`,
+      userAction: 'DELETE_ACCOUNT',
+      status: 'FAILED'
+    });
+
+    res.status(500).json({ success: false, error: err.message });
   }
+}
+
 };
 
 module.exports = AccountController;

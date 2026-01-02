@@ -57,7 +57,9 @@ const AccountModel = {
     );
     return rows[0];
   },
-
+async deleteAccount(id) {
+  await pool.query("DELETE FROM Account WHERE AccountNo = ?", [id]);
+},
   async updateBalance(AccountNo, newBalance) {
     await db.query(
       "UPDATE Account SET Balance = ? WHERE AccountNo = ?",
