@@ -8,7 +8,7 @@ const AccountController = {
     try {
       const { CustomerID, Type, Balance } = req.body;
       const accountId = await AccountModel.createAccount({ CustomerID, Type, Balance });
-      
+
       // Log the operation
       await AuditLogController.logOperation({
         operation: 'INSERT',
@@ -18,7 +18,7 @@ const AccountController = {
         userAction: 'CREATE_ACCOUNT',
         status: 'SUCCESS'
       });
-      
+
       res.json({ success: true, AccountNo: accountId });
     } catch (err) {
       // Log the failure
@@ -30,7 +30,7 @@ const AccountController = {
         userAction: 'CREATE_ACCOUNT',
         status: 'FAILED'
       });
-      
+
       res.status(500).json({ success: false, error: err.message });
     }
   },
@@ -75,14 +75,14 @@ const AccountController = {
       res.json({ success: true, newBalance });
     } catch (err) {
       await connection.rollback();
-      
+
       // Log ROLLBACK operation
       await connection.query(
         `INSERT INTO AuditLog (Operation, TableAffected, RecordID, Details, UserAction, Status) 
          VALUES ('ROLLBACK', 'Account', ?, ?, 'DEPOSIT', 'FAILED')`,
         [AccountNo, `Deposit failed: ${err.message}`]
       );
-      
+
       res.status(500).json({ success: false, error: err.message });
     } finally {
       connection.release();
@@ -119,48 +119,56 @@ const AccountController = {
       res.json({ success: true, newBalance });
     } catch (err) {
       await connection.rollback();
-      
+
       // Log ROLLBACK operation
       await connection.query(
         `INSERT INTO AuditLog (Operation, TableAffected, RecordID, Details, UserAction, Status) 
          VALUES ('ROLLBACK', 'Account', ?, ?, 'WITHDRAW', 'FAILED')`,
         [AccountNo, `Withdrawal failed: ${err.message}`]
       );
-      
+
       res.status(500).json({ success: false, error: err.message });
     } finally {
       connection.release();
     }
   },
+
+  // Delete account
   async deleteAccount(req, res) {
-  const { id } = req.params;
-  try {
-    await AccountModel.deleteAccount(id);
+    const { id } = req.params;
+    const connection = await pool.getConnection();
 
-    await AuditLogController.logOperation({
-      operation: 'DELETE',
-      table: 'Account',
-      recordId: id,
-      details: `Account ${id} deleted`,
-      userAction: 'DELETE_ACCOUNT',
-      status: 'SUCCESS'
-    });
+    try {
+      await connection.beginTransaction();
 
-    res.json({ success: true });
-  } catch (err) {
-    await AuditLogController.logOperation({
-      operation: 'DELETE',
-      table: 'Account',
-      recordId: id,
-      details: `Failed to delete account: ${err.message}`,
-      userAction: 'DELETE_ACCOUNT',
-      status: 'FAILED'
-    });
+      // Delete account
+      const [result] = await connection.query("DELETE FROM Account WHERE AccountNo = ?", [id]);
+      if (result.affectedRows === 0) throw new Error("Account not found");
 
-    res.status(500).json({ success: false, error: err.message });
-  }
-}
+      // Record deletion in AuditLog
+      await connection.query(
+        `INSERT INTO AuditLog (Operation, TableAffected, RecordID, Details, UserAction, Status)
+         VALUES ('DELETE', 'Account', ?, ?, 'DELETE_ACCOUNT', 'SUCCESS')`,
+        [id, `Account ${id} deleted successfully`]
+      );
 
+      await connection.commit();
+      res.json({ success: true, message: `Account ${id} deleted` });
+    } catch (err) {
+      await connection.rollback();
+
+      // Log failure
+      await connection.query(
+        `INSERT INTO AuditLog (Operation, TableAffected, RecordID, Details, UserAction, Status)
+         VALUES ('ROLLBACK', 'Account', ?, ?, 'DELETE_ACCOUNT', 'FAILED')`,
+        [id, `Delete failed: ${err.message}`]
+      );
+
+      res.status(500).json({ success: false, error: err.message });
+    } finally {
+      connection.release();
+    }
+  },
 };
 
 module.exports = AccountController;
