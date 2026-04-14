@@ -14,17 +14,23 @@ const customerRoutes = require("./routes/customerRoutes");
 const accountRoutes = require("./routes/accountRoutes");
 const transactionRoutes = require("./routes/transactionRoutes");
 const dashboardRoutes = require("./routes/dashboardRoutes");
-const auditLogRoutes = require("./routes/auditLogRoutes"); 
+const auditLogRoutes = require("./routes/auditLogRoutes");
+const authRoutes = require("./routes/authRoutes");
+const employeeRoutes = require("./routes/employeeRoutes");
+const adminRoutes = require("./routes/adminRoutes");
 
 // Assign routes
 app.use("/customers", customerRoutes);
 app.use("/accounts", accountRoutes);
 app.use("/transactions", transactionRoutes);
 app.use("/dashboard", dashboardRoutes);
-app.use("/audit-logs", auditLogRoutes); 
+app.use("/audit-logs", auditLogRoutes);
+app.use("/auth", authRoutes);
+app.use("/employees", employeeRoutes);
+app.use("/admin", adminRoutes);
 
 // Test server
-app.get("/", (req, res) => res.send("CBS Backend running!"));
+app.get("/", (req, res) => res.send("Aurora Bank CBS Backend running!"));
 
 // Start server
 app.listen(PORT, () => console.log(`Server running on http://localhost:${PORT}`));

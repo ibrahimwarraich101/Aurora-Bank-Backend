@@ -7,38 +7,80 @@ const AccountController = {
   async createAccount(req, res) {
     try {
       const { CustomerID, Type, Balance } = req.body;
+
+      // Employee can only create accounts for their own customers
+      if (req.user.role === "employee") {
+        const [customers] = await pool.query(
+          "SELECT CustomerID FROM Customer WHERE CustomerID = ? AND created_by = ?",
+          [CustomerID, req.user.id]
+        );
+        if (customers.length === 0) {
+          return res.status(403).json({ error: "You can only create accounts for your own customers" });
+        }
+      }
+
       const accountId = await AccountModel.createAccount({ CustomerID, Type, Balance });
 
-      // Log the operation
-      await AuditLogController.logOperation({
-        operation: 'INSERT',
-        table: 'Account',
-        recordId: accountId,
-        details: `New ${Type} account created with balance $${Balance}`,
-        userAction: 'CREATE_ACCOUNT',
-        status: 'SUCCESS'
-      });
+      // Update created_by on the new account
+      await pool.query("UPDATE Account SET created_by = ? WHERE AccountNo = ?", [req.user.id, accountId]);
+
+      await pool.query(
+        "INSERT INTO AuditLog (Operation, TableAffected, User, performed_by, action, record_id, details) VALUES (?, ?, ?, ?, ?, ?, ?)",
+        ["INSERT", "Account", req.user.email, req.user.id, "CREATE_ACCOUNT", accountId, `New ${Type} account created with balance $${Balance}`]
+      );
 
       res.json({ success: true, AccountNo: accountId });
     } catch (err) {
-      // Log the failure
-      await AuditLogController.logOperation({
-        operation: 'INSERT',
-        table: 'Account',
-        recordId: null,
-        details: `Failed to create account: ${err.message}`,
-        userAction: 'CREATE_ACCOUNT',
-        status: 'FAILED'
-      });
-
       res.status(500).json({ success: false, error: err.message });
     }
   },
 
-  // Get all accounts
+  // Get all accounts (scoped by role)
   async getAccounts(req, res) {
     try {
-      const accounts = await AccountModel.getAccounts();
+      let query, params = [];
+      if (req.user.role === "admin") {
+        query = `
+          SELECT a.*, c.Name as CustomerName, u.name as created_by_name
+          FROM Account a
+          LEFT JOIN Customer c ON c.CustomerID = a.CustomerID
+          LEFT JOIN users u ON u.id = a.created_by
+          ORDER BY a.CreatedAt DESC
+        `;
+      } else {
+        query = `
+          SELECT a.*, c.Name as CustomerName, u.name as created_by_name
+          FROM Account a
+          LEFT JOIN Customer c ON c.CustomerID = a.CustomerID
+          LEFT JOIN users u ON u.id = a.created_by
+          WHERE a.created_by = ?
+          ORDER BY a.CreatedAt DESC
+        `;
+        params = [req.user.id];
+      }
+      const [accounts] = await pool.query(query, params);
+      res.json(accounts);
+    } catch (err) {
+      res.status(500).json({ error: err.message });
+    }
+  },
+
+  // Get accounts for a specific customer (for transaction forms)
+  async getAccountsByCustomer(req, res) {
+    try {
+      const { customerId } = req.params;
+      let query, params;
+
+      if (req.user.role === "admin") {
+        query = "SELECT AccountNo, Type, Balance FROM Account WHERE CustomerID = ?";
+        params = [customerId];
+      } else {
+        // Employee: validate customer belongs to them
+        query = "SELECT a.AccountNo, a.Type, a.Balance FROM Account a JOIN Customer c ON c.CustomerID = a.CustomerID WHERE a.CustomerID = ? AND c.created_by = ?";
+        params = [customerId, req.user.id];
+      }
+
+      const [accounts] = await pool.query(query, params);
       res.json(accounts);
     } catch (err) {
       res.status(500).json({ error: err.message });
@@ -55,34 +97,28 @@ const AccountController = {
       const [account] = await connection.query("SELECT * FROM Account WHERE AccountNo = ?", [AccountNo]);
       if (account.length === 0) throw new Error("Account not found");
 
+      // Employee scoping
+      if (req.user.role === "employee" && account[0].created_by !== req.user.id) {
+        throw new Error("You can only deposit into your own accounts");
+      }
+
       const newBalance = parseFloat(account[0].Balance) + parseFloat(Amount);
       await connection.query("UPDATE Account SET Balance = ? WHERE AccountNo = ?", [newBalance, AccountNo]);
 
-      // Record transaction
-      await connection.query(
-        "INSERT INTO Transaction (ToAccount, Amount, Type) VALUES (?, ?, 'Deposit')",
-        [AccountNo, Amount]
+      const [txResult] = await connection.query(
+        "INSERT INTO Transaction (ToAccount, Amount, Type, created_by) VALUES (?, ?, 'Deposit', ?)",
+        [AccountNo, Amount, req.user.id]
       );
 
-      // Log COMMIT operation
       await connection.query(
-        `INSERT INTO AuditLog (Operation, TableAffected, RecordID, Details, UserAction, Status) 
-         VALUES ('COMMIT', 'Account', ?, ?, 'DEPOSIT', 'SUCCESS')`,
-        [AccountNo, `Deposit of $${Amount}. New balance: $${newBalance.toFixed(2)}`]
+        "INSERT INTO AuditLog (Operation, TableAffected, User, performed_by, action, record_id, details) VALUES (?, ?, ?, ?, ?, ?, ?)",
+        ["COMMIT", "Account", req.user.email, req.user.id, "DEPOSIT", txResult.insertId, `Deposit of $${Amount} to account #${AccountNo}. New balance: $${newBalance.toFixed(2)}`]
       );
 
       await connection.commit();
       res.json({ success: true, newBalance });
     } catch (err) {
       await connection.rollback();
-
-      // Log ROLLBACK operation
-      await connection.query(
-        `INSERT INTO AuditLog (Operation, TableAffected, RecordID, Details, UserAction, Status) 
-         VALUES ('ROLLBACK', 'Account', ?, ?, 'DEPOSIT', 'FAILED')`,
-        [AccountNo, `Deposit failed: ${err.message}`]
-      );
-
       res.status(500).json({ success: false, error: err.message });
     } finally {
       connection.release();
@@ -100,33 +136,27 @@ const AccountController = {
       if (account.length === 0) throw new Error("Account not found");
       if (parseFloat(account[0].Balance) < Amount) throw new Error("Insufficient balance");
 
+      if (req.user.role === "employee" && account[0].created_by !== req.user.id) {
+        throw new Error("You can only withdraw from your own accounts");
+      }
+
       const newBalance = parseFloat(account[0].Balance) - parseFloat(Amount);
       await connection.query("UPDATE Account SET Balance = ? WHERE AccountNo = ?", [newBalance, AccountNo]);
 
-      await connection.query(
-        "INSERT INTO Transaction (FromAccount, Amount, Type) VALUES (?, ?, 'Withdraw')",
-        [AccountNo, Amount]
+      const [txResult] = await connection.query(
+        "INSERT INTO Transaction (FromAccount, Amount, Type, created_by) VALUES (?, ?, 'Withdraw', ?)",
+        [AccountNo, Amount, req.user.id]
       );
 
-      // Log COMMIT operation
       await connection.query(
-        `INSERT INTO AuditLog (Operation, TableAffected, RecordID, Details, UserAction, Status) 
-         VALUES ('COMMIT', 'Account', ?, ?, 'WITHDRAW', 'SUCCESS')`,
-        [AccountNo, `Withdrawal of $${Amount}. New balance: $${newBalance.toFixed(2)}`]
+        "INSERT INTO AuditLog (Operation, TableAffected, User, performed_by, action, record_id, details) VALUES (?, ?, ?, ?, ?, ?, ?)",
+        ["COMMIT", "Account", req.user.email, req.user.id, "WITHDRAW", txResult.insertId, `Withdrawal of $${Amount} from account #${AccountNo}. New balance: $${newBalance.toFixed(2)}`]
       );
 
       await connection.commit();
       res.json({ success: true, newBalance });
     } catch (err) {
       await connection.rollback();
-
-      // Log ROLLBACK operation
-      await connection.query(
-        `INSERT INTO AuditLog (Operation, TableAffected, RecordID, Details, UserAction, Status) 
-         VALUES ('ROLLBACK', 'Account', ?, ?, 'WITHDRAW', 'FAILED')`,
-        [AccountNo, `Withdrawal failed: ${err.message}`]
-      );
-
       res.status(500).json({ success: false, error: err.message });
     } finally {
       connection.release();
@@ -137,33 +167,28 @@ const AccountController = {
   async deleteAccount(req, res) {
     const { id } = req.params;
     const connection = await pool.getConnection();
-
     try {
       await connection.beginTransaction();
 
-      // Delete account
+      const [accounts] = await connection.query("SELECT * FROM Account WHERE AccountNo = ?", [id]);
+      if (accounts.length === 0) throw new Error("Account not found");
+
+      if (req.user.role === "employee" && accounts[0].created_by !== req.user.id) {
+        throw new Error("You can only delete your own accounts");
+      }
+
       const [result] = await connection.query("DELETE FROM Account WHERE AccountNo = ?", [id]);
       if (result.affectedRows === 0) throw new Error("Account not found");
 
-      // Record deletion in AuditLog
       await connection.query(
-        `INSERT INTO AuditLog (Operation, TableAffected, RecordID, Details, UserAction, Status)
-         VALUES ('DELETE', 'Account', ?, ?, 'DELETE_ACCOUNT', 'SUCCESS')`,
-        [id, `Account ${id} deleted successfully`]
+        "INSERT INTO AuditLog (Operation, TableAffected, User, performed_by, action, record_id, details) VALUES (?, ?, ?, ?, ?, ?, ?)",
+        ["DELETE", "Account", req.user.email, req.user.id, "DELETE_ACCOUNT", id, `Account ${id} deleted`]
       );
 
       await connection.commit();
       res.json({ success: true, message: `Account ${id} deleted` });
     } catch (err) {
       await connection.rollback();
-
-      // Log failure
-      await connection.query(
-        `INSERT INTO AuditLog (Operation, TableAffected, RecordID, Details, UserAction, Status)
-         VALUES ('ROLLBACK', 'Account', ?, ?, 'DELETE_ACCOUNT', 'FAILED')`,
-        [id, `Delete failed: ${err.message}`]
-      );
-
       res.status(500).json({ success: false, error: err.message });
     } finally {
       connection.release();
