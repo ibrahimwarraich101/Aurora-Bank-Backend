@@ -2,7 +2,8 @@ const User = require("../models/userModel");
 const Customer = require("../models/customerModel");
 const AuditLog = require("../models/auditLogModel");
 const bcrypt = require("bcryptjs");
-const { sendEmployeeWelcomeEmail, sendProfileUpdateEmail } = require("../utils/emailService");
+const { sendEmployeeWelcomeEmail, sendProfileUpdateEmail, sendStatusChangeEmail, sendAccountDeletedEmail } = require("../utils/emailService");
+
 
 const EmployeeController = {
   // Get all employees with their customer count
@@ -156,6 +157,10 @@ const EmployeeController = {
         Details: `Employee ${employee.name} ${employee.is_active ? "activated" : "deactivated"}`
       });
 
+      // Notify the employee of their status change in the background
+      sendStatusChangeEmail({ name: employee.name, email: employee.email }, employee.is_active)
+        .catch(err => console.error("Status change email failed:", err));
+
       res.json({ success: true, is_active: employee.is_active });
     } catch (err) {
       res.status(500).json({ error: err.message });
@@ -181,6 +186,10 @@ const EmployeeController = {
         RecordID: id,
         Details: `Employee ${employee.name} deleted`
       });
+
+      // Notify the employee their account has been deleted in the background
+      sendAccountDeletedEmail({ name: employee.name, email: employee.email })
+        .catch(err => console.error("Account deletion email failed:", err));
 
       res.json({ success: true, message: "Employee deleted" });
     } catch (err) {

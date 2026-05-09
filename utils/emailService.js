@@ -183,7 +183,91 @@ const sendProfileUpdateEmail = async (employeeData, updatedFields) => {
   return transporter.sendMail(mailOptions);
 };
 
+// ── Status Change Email (Activated / Deactivated) ──────────────────────────
+const sendStatusChangeEmail = async (employeeData, isActive) => {
+  const { name, email } = employeeData;
+  const status = isActive ? 'Activated' : 'Deactivated';
+  const statusColor = isActive ? '#10b981' : '#ef4444';
+  const statusBg = isActive ? 'rgba(16,185,129,0.12)' : 'rgba(239,68,68,0.12)';
+  const icon = isActive ? '✅' : '⛔';
+  const portalUrl = process.env.FRONTEND_URL || 'https://bank-aurora.vercel.app';
+
+  const mailOptions = {
+    from: `"Aurora Bank Admin" <${process.env.EMAIL_USER}>`,
+    to: email,
+    subject: `${icon} Account ${status} — Aurora Bank`,
+    html: `
+      <div style="margin:0;padding:0;background:#f4f7fa;font-family:'Segoe UI',Helvetica,Arial,sans-serif;">
+        <table border="0" cellpadding="0" cellspacing="0" width="100%">
+          <tr><td align="center" style="padding:40px 0;">
+            <table border="0" cellpadding="0" cellspacing="0" width="600" style="background:#ffffff;border-radius:16px;overflow:hidden;border:1px solid #eef2f7;">
+              <tr><td align="center" style="background:linear-gradient(135deg,#1e1b4b 0%,#312e81 100%);padding:30px 20px;">
+                <h1 style="color:#ffffff;margin:0;font-size:24px;font-weight:800;">Aurora Bank</h1>
+                <p style="color:rgba(255,255,255,0.6);margin:4px 0 0;font-size:13px;">Enterprise Portal — Security Notification</p>
+              </td></tr>
+              <tr><td style="padding:40px;">
+                <div style="background:${statusBg};border:1px solid ${statusColor};border-radius:12px;padding:20px;text-align:center;margin-bottom:28px;">
+                  <p style="font-size:32px;margin:0 0 8px;">${icon}</p>
+                  <p style="margin:0;font-size:18px;font-weight:700;color:${statusColor};">Account ${status}</p>
+                </div>
+                <p style="color:#4b5563;font-size:15px;line-height:1.6;">Hello <strong>${name}</strong>, your Aurora Bank employee account has been <strong style="color:${statusColor};">${status.toLowerCase()}</strong> by an administrator.</p>
+                ${ isActive
+                  ? `<p style="color:#4b5563;font-size:14px;">You can now log in and access the portal using your existing credentials.</p>
+                     <div style="text-align:center;margin-top:24px;"><a href="${portalUrl}/login" style="background:linear-gradient(135deg,#4f46e5,#7c3aed);color:#fff;padding:14px 28px;border-radius:10px;text-decoration:none;font-weight:700;font-size:14px;">Login to Portal →</a></div>`
+                  : `<p style="color:#4b5563;font-size:14px;">Your access to the Aurora Bank portal has been temporarily suspended. Please contact your administrator if you believe this is a mistake.</p>`
+                }
+              </td></tr>
+              <tr><td style="padding:0 40px 30px;text-align:center;"><p style="color:#94a3b8;font-size:11px;margin:0;">© 2026 Aurora Bank Security Team. This is a mandatory security notification.</p></td></tr>
+            </table>
+          </td></tr>
+        </table>
+      </div>
+    `,
+  };
+  return transporter.sendMail(mailOptions);
+};
+
+// ── Account Deleted Email ──────────────────────────────────────────────────
+const sendAccountDeletedEmail = async (employeeData) => {
+  const { name, email } = employeeData;
+
+  const mailOptions = {
+    from: `"Aurora Bank Admin" <${process.env.EMAIL_USER}>`,
+    to: email,
+    subject: `🗑️ Account Removed — Aurora Bank`,
+    html: `
+      <div style="margin:0;padding:0;background:#f4f7fa;font-family:'Segoe UI',Helvetica,Arial,sans-serif;">
+        <table border="0" cellpadding="0" cellspacing="0" width="100%">
+          <tr><td align="center" style="padding:40px 0;">
+            <table border="0" cellpadding="0" cellspacing="0" width="600" style="background:#ffffff;border-radius:16px;overflow:hidden;border:1px solid #eef2f7;">
+              <tr><td align="center" style="background:linear-gradient(135deg,#1e1b4b 0%,#312e81 100%);padding:30px 20px;">
+                <h1 style="color:#ffffff;margin:0;font-size:24px;font-weight:800;">Aurora Bank</h1>
+                <p style="color:rgba(255,255,255,0.6);margin:4px 0 0;font-size:13px;">Enterprise Portal — Security Notification</p>
+              </td></tr>
+              <tr><td style="padding:40px;">
+                <div style="background:rgba(239,68,68,0.08);border:1px solid #ef4444;border-radius:12px;padding:20px;text-align:center;margin-bottom:28px;">
+                  <p style="font-size:32px;margin:0 0 8px;">🗑️</p>
+                  <p style="margin:0;font-size:18px;font-weight:700;color:#ef4444;">Account Permanently Removed</p>
+                </div>
+                <p style="color:#4b5563;font-size:15px;line-height:1.6;">Hello <strong>${name}</strong>, your Aurora Bank employee account has been <strong style="color:#ef4444;">permanently deleted</strong> from the system by an administrator.</p>
+                <p style="color:#4b5563;font-size:14px;line-height:1.6;">All your associated data has been removed. If you believe this was done in error, please contact your HR department or administrator directly.</p>
+                <div style="padding:16px;background:#fffbeb;border-left:4px solid #f59e0b;border-radius:4px;margin-top:24px;">
+                  <p style="color:#92400e;margin:0;font-size:13px;"><strong>Note:</strong> This action is irreversible. Your login credentials are no longer valid.</p>
+                </div>
+              </td></tr>
+              <tr><td style="padding:0 40px 30px;text-align:center;"><p style="color:#94a3b8;font-size:11px;margin:0;">© 2026 Aurora Bank Security Team. This is a mandatory security notification.</p></td></tr>
+            </table>
+          </td></tr>
+        </table>
+      </div>
+    `,
+  };
+  return transporter.sendMail(mailOptions);
+};
+
 module.exports = {
   sendEmployeeWelcomeEmail,
   sendProfileUpdateEmail,
+  sendStatusChangeEmail,
+  sendAccountDeletedEmail,
 };
