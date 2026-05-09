@@ -33,12 +33,13 @@ const guestLogin = async (req, res) => {
 const login = async (req, res) => {
   try {
     const { email, password } = req.body;
+    const UserModel = User.get();
 
     if (!email || !password) {
       return res.status(400).json({ error: "Username/email and password are required" });
     }
 
-    const user = await User.findOne({
+    const user = await UserModel.findOne({
       $or: [{ email: email }, { username: email }],
       is_active: true
     });
@@ -82,8 +83,9 @@ const changePassword = async (req, res) => {
   try {
     const { currentPassword, newPassword } = req.body;
     const userId = req.user.id;
+    const UserModel = User.get();
 
-    const user = await User.findById(userId);
+    const user = await UserModel.findById(userId);
     if (!user) {
       return res.status(404).json({ error: "User not found" });
     }
@@ -116,15 +118,16 @@ const updateProfile = async (req, res) => {
   try {
     const { name, email } = req.body;
     const userId = req.user.id;
+    const UserModel = User.get();
 
     if (email) {
-      const existing = await User.findOne({ email, _id: { $ne: userId } });
+      const existing = await UserModel.findOne({ email, _id: { $ne: userId } });
       if (existing) {
         return res.status(400).json({ error: "Email already in use" });
       }
     }
 
-    const updatedUser = await User.findByIdAndUpdate(
+    const updatedUser = await UserModel.findByIdAndUpdate(
       userId,
       { $set: { name, email } },
       { new: true }
@@ -140,7 +143,8 @@ const updateProfile = async (req, res) => {
 const forgotPassword = async (req, res) => {
   try {
     const { email } = req.body;
-    const user = await User.findOne({ email });
+    const UserModel = User.get();
+    const user = await UserModel.findOne({ email });
     if (!user) {
       return res.status(400).json({ error: "Email not found" });
     }

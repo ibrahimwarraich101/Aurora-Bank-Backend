@@ -8,8 +8,9 @@ const transporter = nodemailer.createTransport({
   },
 });
 
-const sendEmployeeWelcomeEmail = async (employeeData) => {
+const sendEmployeeWelcomeEmail = async (employeeData, baseUrl) => {
   const { name, email, username, password } = employeeData;
+  const loginUrl = baseUrl || process.env.FRONTEND_URL || 'http://localhost:5173';
 
   const mailOptions = {
     from: `"Aurora Bank Admin" <${process.env.EMAIL_USER}>`,
@@ -28,7 +29,7 @@ const sendEmployeeWelcomeEmail = async (employeeData) => {
         </p>
         
         <div style="background-color: #f3f4f6; padding: 20px; border-radius: 8px; margin: 20px 0; border: 1px solid #e5e7eb;">
-          <p style="margin: 0; color: #374151;"><strong>Login URL:</strong> <a href="${process.env.FRONTEND_URL || 'http://localhost:5173'}/login" style="color: #4f46e5;">Aurora Bank Login</a></p>
+          <p style="margin: 0; color: #374151;"><strong>Login URL:</strong> <a href="${loginUrl}/login" style="color: #4f46e5;">Aurora Bank Login</a></p>
           <hr style="border: 0; border-top: 1px solid #d1d5db; margin: 15px 0;">
           <p style="margin: 5px 0; color: #374151;"><strong>Username:</strong> <code style="background: #ffffff; padding: 2px 5px; border-radius: 4px;">${username}</code></p>
           <p style="margin: 5px 0; color: #374151;"><strong>Email:</strong> ${email}</p>

@@ -8,7 +8,8 @@ const EmployeeController = {
   // Get all employees with their customer count
   async getAllEmployees(req, res) {
     try {
-      const employees = await User.aggregate([
+      const UserModel = User.get();
+      const employees = await UserModel.aggregate([
         { $match: { role: 'employee' } },
         {
           $lookup: {
@@ -42,17 +43,19 @@ const EmployeeController = {
   async createEmployee(req, res) {
     try {
       const { name, email, password, phone, username } = req.body;
+      const UserModel = User.get();
+      
       if (!name || !email || !password || !username) {
         return res.status(400).json({ error: "Name, email, password, and username are required" });
       }
 
-      const existing = await User.findOne({ $or: [{ email }, { username }] });
+      const existing = await UserModel.findOne({ $or: [{ email }, { username }] });
       if (existing) {
         return res.status(400).json({ error: "Email or username already in use" });
       }
 
       const hashedPassword = await bcrypt.hash(password, 10);
-      const user = new User({
+      const user = new UserModel({
         name,
         email,
         password: hashedPassword,
@@ -72,7 +75,8 @@ const EmployeeController = {
       });
 
       try {
-        await sendEmployeeWelcomeEmail({ name, email, username, password });
+        const origin = req.headers.origin; // e.g., http://localhost:5173 or https://aurora-bankfrontend.vercel.app
+        await sendEmployeeWelcomeEmail({ name, email, username, password }, origin);
       } catch (emailErr) {
         console.error("Email sending failed:", emailErr);
       }
@@ -88,15 +92,16 @@ const EmployeeController = {
     try {
       const { id } = req.params;
       const { name, email, phone } = req.body;
+      const UserModel = User.get();
 
       if (email) {
-        const existing = await User.findOne({ email, _id: { $ne: id } });
+        const existing = await UserModel.findOne({ email, _id: { $ne: id } });
         if (existing) {
           return res.status(400).json({ error: "Email already in use" });
         }
       }
 
-      await User.findByIdAndUpdate(id, { $set: { name, email, phone } });
+      await UserModel.findByIdAndUpdate(id, { $set: { name, email, phone } });
 
       await AuditLog.logOperation({
         Operation: "UPDATE",
@@ -116,7 +121,8 @@ const EmployeeController = {
   async toggleActive(req, res) {
     try {
       const { id } = req.params;
-      const employee = await User.findById(id);
+      const UserModel = User.get();
+      const employee = await UserModel.findById(id);
       if (!employee || employee.role !== 'employee') {
         return res.status(404).json({ error: "Employee not found" });
       }
@@ -142,12 +148,13 @@ const EmployeeController = {
   async deleteEmployee(req, res) {
     try {
       const { id } = req.params;
-      const employee = await User.findById(id);
+      const UserModel = User.get();
+      const employee = await UserModel.findById(id);
       if (!employee || employee.role !== 'employee') {
         return res.status(404).json({ error: "Employee not found" });
       }
 
-      await User.findByIdAndDelete(id);
+      await UserModel.findByIdAndDelete(id);
 
       await AuditLog.logOperation({
         Operation: "DELETE",

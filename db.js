@@ -32,11 +32,13 @@ const getActiveConnection = () => {
 };
 
 /**
- * Helper to get a model bound to the active connection
+ * Helper to get a model bound to the active connection.
+ * It ensures that the model is registered on the specific connection (guest or main).
  */
 const getModel = (modelName, schema) => {
   const conn = getActiveConnection();
-  return conn.model(modelName, schema);
+  // Check if model is already registered on this connection to avoid errors
+  return conn.models[modelName] || conn.model(modelName, schema);
 };
 
 module.exports = {

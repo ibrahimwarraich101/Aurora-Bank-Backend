@@ -1,6 +1,7 @@
 const mongoose = require('mongoose');
 const AuditLog = require('./auditLogModel');
-const { CustomerModel } = require('./customerModel');
+const { getModel } = require('../db');
+const { customerSchema } = require('./customerModel');
 
 const accountSchema = new mongoose.Schema({
   accountNo: { type: String, unique: true, required: true },
@@ -11,15 +12,18 @@ const accountSchema = new mongoose.Schema({
   createdAt: { type: Date, default: Date.now }
 });
 
-const AccountModelInternal = mongoose.model('Account', accountSchema);
+const getAccount = () => getModel('Account', accountSchema);
+const getCustomer = () => getModel('Customer', customerSchema);
 
 const AccountModel = {
+  get: getAccount,
   async createAccount({ CustomerID, Type, Balance = 0 }) {
     if (!CustomerID || !Type) {
       throw new Error("CustomerID and Type are required");
     }
 
-    const customerExists = await CustomerModel.findById(CustomerID);
+    const Customer = getCustomer();
+    const customerExists = await Customer.findById(CustomerID);
     if (!customerExists) {
       throw new Error("Customer not found");
     }
@@ -27,7 +31,8 @@ const AccountModel = {
     // Simple account number generation
     const accountNo = 'AUR' + Date.now().toString().slice(-8);
 
-    const account = new AccountModelInternal({
+    const Account = getAccount();
+    const account = new Account({
       accountNo,
       customerId: CustomerID,
       type: Type,
@@ -47,8 +52,12 @@ const AccountModel = {
   },
 
   async getAccounts() {
+    const Account = getAccount();
+    // Ensure Customer model is registered on the same connection
+    getCustomer();
+    
     // Populate customer details to mimic the JOIN
-    const accounts = await AccountModelInternal.find()
+    const accounts = await Account.find()
       .populate('customerId', 'name cnic')
       .sort({ createdAt: -1 });
 
@@ -63,15 +72,15 @@ const AccountModel = {
   },
 
   async getAccountById(AccountNo) {
-    return await AccountModelInternal.findOne({ accountNo: AccountNo });
+    return await getAccount().findOne({ accountNo: AccountNo });
   },
 
   async deleteAccount(id) {
-    await AccountModelInternal.deleteOne({ accountNo: id });
+    await getAccount().deleteOne({ accountNo: id });
   },
 
   async updateBalance(AccountNo, newBalance) {
-    await AccountModelInternal.updateOne(
+    await getAccount().updateOne(
       { accountNo: AccountNo },
       { $set: { balance: newBalance } }
     );
@@ -79,5 +88,4 @@ const AccountModel = {
 };
 
 module.exports = AccountModel;
-module.exports.AccountModelInternal = AccountModelInternal;
-module.exports.accountSchema = accountSchema;
+module.exports.accountSchema = accountSchema;

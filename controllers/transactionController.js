@@ -7,10 +7,11 @@ const TransactionController = {
   async getAllTransactions(req, res) {
     try {
       let transactions;
-      if (req.user.role === "admin") {
-        transactions = await Transaction.TransactionInternal.find().sort({ dateTime: -1 });
+      const TransactionModel = Transaction.get();
+      if (req.user.role === "admin" || req.user.role === "guest") {
+        transactions = await TransactionModel.find().sort({ dateTime: -1 });
       } else {
-        transactions = await Transaction.TransactionInternal.find({ created_by: req.user.id }).sort({ dateTime: -1 });
+        transactions = await TransactionModel.find({ created_by: req.user.id }).sort({ dateTime: -1 });
       }
       res.json(transactions);
     } catch (err) {
@@ -20,11 +21,11 @@ const TransactionController = {
 
   async transfer(req, res) {
     const { FromAccount, ToAccount, Amount } = req.body;
-    const session = await mongoose.startSession();
-    session.startTransaction();
+    const AccountModel = Account.get();
+    const TransactionModel = Transaction.get();
 
     try {
-      const sender = await Account.AccountModelInternal.findOne({ accountNo: FromAccount }).session(session);
+      const sender = await AccountModel.findOne({ accountNo: FromAccount });
       if (!sender) throw new Error("Sender account not found");
       if (sender.balance < Amount) throw new Error("Insufficient balance");
 
@@ -32,41 +33,37 @@ const TransactionController = {
         throw new Error("You can only transfer from your own accounts");
       }
 
-      const receiver = await Account.AccountModelInternal.findOne({ accountNo: ToAccount }).session(session);
+      const receiver = await AccountModel.findOne({ accountNo: ToAccount });
       if (!receiver) throw new Error("Receiver account not found");
 
       sender.balance -= parseFloat(Amount);
       receiver.balance += parseFloat(Amount);
 
-      await sender.save({ session });
-      await receiver.save({ session });
+      await sender.save();
+      await receiver.save();
 
-      const transaction = new Transaction.TransactionInternal({
+      const transaction = new TransactionModel({
         fromAccount: FromAccount,
         toAccount: ToAccount,
         amount: Amount,
         type: 'Transfer',
         created_by: req.user.id
       });
-      const txResult = await transaction.save({ session });
+      const txResult = await transaction.save();
 
       await AuditLog.logOperation({
         Operation: "COMMIT",
         TableAffected: "Transaction",
         User: req.user.email,
         RecordID: txResult._id,
-        Details: `Transfer of $${Amount} from account #${FromAccount} to #${ToAccount}`
+        Details: `Transfer of Rs. ${Amount} from account #${FromAccount} to #${ToAccount}`
       });
 
-      await session.commitTransaction();
-      session.endSession();
       res.json({ success: true, message: "Transfer successful" });
     } catch (err) {
-      await session.abortTransaction();
-      session.endSession();
       res.status(500).json({ success: false, error: err.message });
     }
   },
 };
 
-module.exports = TransactionController;
+module.exports = TransactionController;

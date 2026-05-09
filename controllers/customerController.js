@@ -6,10 +6,11 @@ const AuditLog = require("../models/auditLogModel");
 const getAllCustomers = async (req, res) => {
   try {
     let customers;
-    if (req.user.role === "admin") {
-      customers = await Customer.CustomerModel.find().sort({ createdAt: -1 });
+    const CustomerModel = Customer.get();
+    if (req.user.role === "admin" || req.user.role === "guest") {
+      customers = await CustomerModel.find().sort({ createdAt: -1 });
     } else {
-      customers = await Customer.CustomerModel.find({ created_by: req.user.id }).sort({ createdAt: -1 });
+      customers = await CustomerModel.find({ created_by: req.user.id }).sort({ createdAt: -1 });
     }
     res.json(customers);
   } catch (err) {
@@ -46,19 +47,21 @@ const deleteCustomer = async (req, res) => {
   const { id } = req.params;
 
   try {
-    const accountCount = await Account.AccountModelInternal.countDocuments({ customerId: id });
+    const AccountModel = Account.get();
+    const accountCount = await AccountModel.countDocuments({ customerId: id });
     if (accountCount > 0) {
       throw new Error("Cannot delete customer with existing accounts. Delete accounts first.");
     }
 
-    const customer = await Customer.CustomerModel.findById(id);
+    const CustomerModel = Customer.get();
+    const customer = await CustomerModel.findById(id);
     if (!customer) throw new Error("Customer not found");
 
     if (req.user.role === "employee" && customer.created_by?.toString() !== req.user.id) {
       throw new Error("You can only delete customers you created");
     }
 
-    await Customer.CustomerModel.findByIdAndDelete(id);
+    await CustomerModel.findByIdAndDelete(id);
 
     await AuditLog.logOperation({
       Operation: "DELETE",
@@ -74,4 +77,4 @@ const deleteCustomer = async (req, res) => {
   }
 };
 
-module.exports = { getAllCustomers, createCustomer, deleteCustomer };
+module.exports = { getAllCustomers, createCustomer, deleteCustomer };

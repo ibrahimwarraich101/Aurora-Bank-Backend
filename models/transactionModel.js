@@ -1,5 +1,6 @@
 const mongoose = require('mongoose');
 const AuditLog = require('./auditLogModel');
+const { getModel } = require('../db');
 
 const transactionSchema = new mongoose.Schema({
   fromAccount: { type: String, default: null },
@@ -9,11 +10,13 @@ const transactionSchema = new mongoose.Schema({
   dateTime: { type: Date, default: Date.now }
 });
 
-const TransactionInternal = mongoose.model('Transaction', transactionSchema);
+const getTransaction = () => getModel('Transaction', transactionSchema);
 
 const TransactionModel = {
+  get: getTransaction,
   async recordTransaction({ FromAccount = null, ToAccount = null, Amount, Type }) {
-    const transaction = new TransactionInternal({
+    const Transaction = getTransaction();
+    const transaction = new Transaction({
       fromAccount: FromAccount,
       toAccount: ToAccount,
       amount: Amount,
@@ -33,16 +36,15 @@ const TransactionModel = {
   },
 
   async getAllTransactions() {
-    return await TransactionInternal.find().sort({ dateTime: -1 }).limit(100);
+    return await getTransaction().find().sort({ dateTime: -1 }).limit(100);
   },
 
   async getTransactionsByAccount(AccountNo) {
-    return await TransactionInternal.find({
+    return await getTransaction().find({
       $or: [{ fromAccount: AccountNo }, { toAccount: AccountNo }]
     }).sort({ dateTime: -1 }).limit(50);
   }
 };
 
 module.exports = TransactionModel;
-module.exports.TransactionInternal = TransactionInternal;
 module.exports.transactionSchema = transactionSchema;

@@ -1,4 +1,5 @@
 const mongoose = require('mongoose');
+const { getModel } = require('../db');
 
 const auditLogSchema = new mongoose.Schema({
   operation: { type: String, required: true },
@@ -9,11 +10,12 @@ const auditLogSchema = new mongoose.Schema({
   dateTime: { type: Date, default: Date.now }
 });
 
-const AuditLog = mongoose.model('AuditLog', auditLogSchema);
+const getAuditLog = () => getModel('AuditLog', auditLogSchema);
 
 const AuditLogModel = {
   async logOperation({ Operation, TableAffected, RecordID = null, User = 'system', Details = null }) {
     try {
+      const AuditLog = getAuditLog();
       const log = new AuditLog({
         operation: Operation,
         tableAffected: TableAffected,
@@ -28,16 +30,17 @@ const AuditLogModel = {
   },
 
   async getAllLogs() {
-    return await AuditLog.find().sort({ dateTime: -1 }).limit(100);
+    return await getAuditLog().find().sort({ dateTime: -1 }).limit(100);
   },
 
   async getLogsByTable(tableName) {
-    return await AuditLog.find({ tableAffected: tableName }).sort({ dateTime: -1 }).limit(50);
+    return await getAuditLog().find({ tableAffected: tableName }).sort({ dateTime: -1 }).limit(50);
   },
 
   async getLogsByOperation(operation) {
-    return await AuditLog.find({ operation }).sort({ dateTime: -1 }).limit(50);
+    return await getAuditLog().find({ operation }).sort({ dateTime: -1 }).limit(50);
   }
 };
 
 module.exports = AuditLogModel;
+module.exports.auditLogSchema = auditLogSchema;

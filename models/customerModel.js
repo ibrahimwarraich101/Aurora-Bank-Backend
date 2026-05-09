@@ -1,4 +1,5 @@
 const mongoose = require('mongoose');
+const { getModel } = require('../db');
 const AuditLog = require("./auditLogModel");
 
 const customerSchema = new mongoose.Schema({
@@ -8,11 +9,12 @@ const customerSchema = new mongoose.Schema({
   createdAt: { type: Date, default: Date.now }
 });
 
-const CustomerModel = mongoose.model('Customer', customerSchema);
+const getCustomer = () => getModel('Customer', customerSchema);
 
 const Customer = {
+  get: getCustomer,
   getAll: async () => {
-    return await CustomerModel.find();
+    return await getCustomer().find();
   },
 
   create: async (data) => {
@@ -22,6 +24,7 @@ const Customer = {
       throw new Error("Name, CNIC, and Contact are required");
     }
 
+    const CustomerModel = getCustomer();
     const customer = new CustomerModel({
       name: Name,
       cnic: CNIC,
@@ -41,10 +44,9 @@ const Customer = {
   },
 
   getById: async (id) => {
-    return await CustomerModel.findById(id);
+    return await getCustomer().findById(id);
   }
 };
 
 module.exports = Customer;
-module.exports.CustomerModel = CustomerModel;
 module.exports.customerSchema = customerSchema;
