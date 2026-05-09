@@ -33,6 +33,10 @@ const AuditLogModel = {
 
   async getLogsByTable(tableName) {
     return await AuditLog.find({ tableAffected: tableName }).sort({ dateTime: -1 }).limit(50);
+  },
+
+  async getLogsByOperation(operation) {
+    return await AuditLog.find({ operation }).sort({ dateTime: -1 }).limit(50);
   }
 };
 
