@@ -79,7 +79,7 @@ const EmployeeController = {
       });
 
       // Send email in the background without awaiting it to make the API response faster
-      const productionUrl = "https://aurora-bankfrontend.vercel.app";
+      const productionUrl = "https://bank-aurora.vercel.app";
       sendEmployeeWelcomeEmail({ name, email, username, password }, productionUrl)
         .catch(emailErr => console.error("Background email sending failed:", emailErr));
 

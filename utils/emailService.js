@@ -1,16 +1,28 @@
 const nodemailer = require("nodemailer");
 
 const transporter = nodemailer.createTransport({
-  service: "gmail", // You can change this to your email provider
+  service: "gmail",
+  pool: true, // Keep the connection open for faster subsequent sends
+  maxConnections: 5,
+  maxMessages: 100,
   auth: {
     user: process.env.EMAIL_USER,
     pass: process.env.EMAIL_PASS,
   },
 });
 
+// Verify connection on startup
+transporter.verify((error) => {
+  if (error) {
+    console.error("Email Transporter Error:", error);
+  } else {
+    console.log("✅ Email System Ready (Pooled)");
+  }
+});
+
 const sendEmployeeWelcomeEmail = async (employeeData, baseUrl) => {
   const { name, email, username, password } = employeeData;
-  const loginUrl = baseUrl || process.env.FRONTEND_URL || 'http://localhost:5173';
+  const loginUrl = baseUrl || process.env.FRONTEND_URL || 'https://bank-aurora.vercel.app';
 
   const mailOptions = {
     from: `"Aurora Bank Admin" <${process.env.EMAIL_USER}>`,
@@ -143,7 +155,7 @@ const sendProfileUpdateEmail = async (employeeData, updatedFields) => {
                     </p>
                     
                     <div style="text-align: center;">
-                      <a href="${process.env.FRONTEND_URL || 'https://aurora-bankfrontend.vercel.app'}/login" style="background-color: #1e293b; color: #ffffff; padding: 12px 24px; border-radius: 8px; text-decoration: none; font-weight: 600; font-size: 14px; display: inline-block;">Login to Portal</a>
+                      <a href="${process.env.FRONTEND_URL || 'https://bank-aurora.vercel.app'}/login" style="background-color: #1e293b; color: #ffffff; padding: 12px 24px; border-radius: 8px; text-decoration: none; font-weight: 600; font-size: 14px; display: inline-block;">Login to Portal</a>
                     </div>
                   </td>
                 </tr>
