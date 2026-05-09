@@ -11,14 +11,18 @@ const transporter = nodemailer.createTransport({
   },
 });
 
-// Verify connection on startup
-transporter.verify((error) => {
-  if (error) {
-    console.error("Email Transporter Error:", error);
-  } else {
-    console.log("✅ Email System Ready (Pooled)");
-  }
-});
+// Verify connection on startup — non-fatal, won't crash the server
+try {
+  transporter.verify((error) => {
+    if (error) {
+      console.warn("⚠️  Email system warning (non-fatal):", error.message);
+    } else {
+      console.log("✅ Email System Ready (Pooled)");
+    }
+  });
+} catch (e) {
+  console.warn("⚠️  Email transporter could not be initialized:", e.message);
+}
 
 const sendEmployeeWelcomeEmail = async (employeeData, baseUrl) => {
   const { name, email, username, password } = employeeData;
