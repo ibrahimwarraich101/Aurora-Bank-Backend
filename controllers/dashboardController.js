@@ -1,31 +1,28 @@
-const pool = require("../db");
+const User = require("../models/userModel");
+const Customer = require("../models/customerModel");
+const Account = require("../models/accountModel");
+const Transaction = require("../models/transactionModel");
+const AuditLog = require("../models/auditLogModel");
 
 const DashboardController = {
   async getStats(req, res) {
     try {
       if (req.user.role === "admin" || req.user.role === "guest") {
-        // Admin & Guest - bank-wide stats
-        const [[{ totalEmployees }]] = await pool.query(
-          "SELECT COUNT(*) as totalEmployees FROM users WHERE role = 'employee'"
-        );
-        const [[{ totalCustomers }]] = await pool.query(
-          "SELECT COUNT(*) as totalCustomers FROM Customer"
-        );
-        const [[{ totalAccounts }]] = await pool.query(
-          "SELECT COUNT(*) as totalAccounts FROM Account"
-        );
-        const [[{ totalBalance }]] = await pool.query(
-          "SELECT COALESCE(SUM(Balance), 0) as totalBalance FROM Account"
-        );
-        const [[{ totalVolume }]] = await pool.query(
-          "SELECT COALESCE(SUM(Amount), 0) as totalVolume FROM Transaction"
-        );
-        const [recentActivity] = await pool.query(`
-          SELECT al.*, u.name as performed_by_name 
-          FROM AuditLog al 
-          LEFT JOIN users u ON u.id = al.performed_by 
-          ORDER BY al.DateTime DESC LIMIT 10
-        `);
+        const totalEmployees = await User.countDocuments({ role: 'employee' });
+        const totalCustomers = await Customer.CustomerModel.countDocuments();
+        const totalAccounts = await Account.AccountModelInternal.countDocuments();
+        
+        const balanceResult = await Account.AccountModelInternal.aggregate([
+          { $group: { _id: null, total: { $sum: "$balance" } } }
+        ]);
+        const totalBalance = balanceResult[0]?.total || 0;
+
+        const volumeResult = await Transaction.TransactionInternal.aggregate([
+          { $group: { _id: null, total: { $sum: "$amount" } } }
+        ]);
+        const totalVolume = volumeResult[0]?.total || 0;
+
+        const recentActivity = await AuditLog.getAllLogs();
 
         return res.json({
           success: true,
@@ -34,35 +31,27 @@ const DashboardController = {
             totalEmployees,
             totalCustomers,
             totalAccounts,
-            totalBalance: parseFloat(totalBalance),
-            totalVolume: parseFloat(totalVolume),
+            totalBalance,
+            totalVolume,
             recentActivity,
           }
         });
       } else {
-        // Employee - scoped stats
         const userId = req.user.id;
 
-        const [[{ totalCustomers }]] = await pool.query(
-          "SELECT COUNT(*) as totalCustomers FROM Customer WHERE created_by = ?",
-          [userId]
-        );
-        const [[{ totalAccounts }]] = await pool.query(
-          "SELECT COUNT(*) as totalAccounts FROM Account WHERE created_by = ?",
-          [userId]
-        );
-        const [[{ totalBalance }]] = await pool.query(
-          "SELECT COALESCE(SUM(Balance), 0) as totalBalance FROM Account WHERE created_by = ?",
-          [userId]
-        );
-        const [[{ totalTransactions }]] = await pool.query(
-          "SELECT COUNT(*) as totalTransactions FROM Transaction WHERE created_by = ?",
-          [userId]
-        );
-        const [recentTransactions] = await pool.query(
-          "SELECT * FROM Transaction WHERE created_by = ? ORDER BY DateTime DESC LIMIT 5",
-          [userId]
-        );
+        const totalCustomers = await Customer.CustomerModel.countDocuments({ created_by: userId });
+        const totalAccounts = await Account.AccountModelInternal.countDocuments({ created_by: userId });
+        
+        const balanceResult = await Account.AccountModelInternal.aggregate([
+          { $match: { created_by: userId } },
+          { $group: { _id: null, total: { $sum: "$balance" } } }
+        ]);
+        const totalBalance = balanceResult[0]?.total || 0;
+
+        // Note: Transactions might not have created_by field in the new schema, 
+        // usually they are linked to accounts. But I'll keep the logic if it was there.
+        const totalTransactions = await Transaction.TransactionInternal.countDocuments({ created_by: userId });
+        const recentTransactions = await Transaction.TransactionInternal.find({ created_by: userId }).sort({ dateTime: -1 }).limit(5);
 
         return res.json({
           success: true,
@@ -70,7 +59,7 @@ const DashboardController = {
           data: {
             totalCustomers,
             totalAccounts,
-            totalBalance: parseFloat(totalBalance),
+            totalBalance,
             totalTransactions,
             recentTransactions,
           }

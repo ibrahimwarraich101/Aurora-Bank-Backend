@@ -1,30 +1,39 @@
-const db = require("../db");
+const mongoose = require('mongoose');
 const AuditLog = require("./auditLogModel");
+
+const customerSchema = new mongoose.Schema({
+  name: { type: String, required: true },
+  cnic: { type: String, required: true, unique: true },
+  contact: { type: String, required: true },
+  createdAt: { type: Date, default: Date.now }
+});
+
+const CustomerModel = mongoose.model('Customer', customerSchema);
 
 const Customer = {
   getAll: async () => {
-    const [rows] = await db.query("SELECT * FROM Customer");
-    return rows;
+    return await CustomerModel.find();
   },
 
   create: async (data) => {
     const { Name, CNIC, Contact } = data;
     
-    // Validate input
     if (!Name || !CNIC || !Contact) {
       throw new Error("Name, CNIC, and Contact are required");
     }
 
-    const [result] = await db.query(
-      "INSERT INTO Customer (Name, CNIC, Contact) VALUES (?, ?, ?)",
-      [Name, CNIC, Contact]
-    );
+    const customer = new CustomerModel({
+      name: Name,
+      cnic: CNIC,
+      contact: Contact
+    });
 
-    // Log to audit
+    const result = await customer.save();
+
     await AuditLog.logOperation({
       Operation: 'INSERT',
       TableAffected: 'Customer',
-      RecordID: result.insertId,
+      RecordID: result._id,
       Details: `Created customer: ${Name}`
     });
 
@@ -32,12 +41,10 @@ const Customer = {
   },
 
   getById: async (id) => {
-    const [rows] = await db.query(
-      "SELECT * FROM Customer WHERE CustomerID = ?",
-      [id]
-    );
-    return rows[0];
+    return await CustomerModel.findById(id);
   }
 };
 
 module.exports = Customer;
+module.exports.CustomerModel = CustomerModel;
+module.exports.customerSchema = customerSchema;

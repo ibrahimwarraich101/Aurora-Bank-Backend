@@ -1,26 +1,52 @@
-const db = require("../db");
+const User = require("../models/userModel");
+const AuditLog = require("../models/auditLogModel");
 const bcrypt = require("bcryptjs");
 const jwt = require("jsonwebtoken");
+const { setupGuestSession } = require("../utils/guestUtils");
+
+const guestLogin = async (req, res) => {
+  try {
+    const { role } = req.body;
+    if (!role || !['admin', 'employee'].includes(role)) {
+      return res.status(400).json({ error: "Role must be admin or employee" });
+    }
+
+    const { guestDbName, guestUser, guestId } = await setupGuestSession(role);
+
+    const token = jwt.sign(
+      { id: guestUser.id, name: guestUser.name, email: guestUser.email, role: guestUser.role, guestDbName, isGuest: true, guestId },
+      process.env.JWT_SECRET || "dev_secret_key",
+      { expiresIn: "2h" }
+    );
+
+    res.json({
+      success: true,
+      token,
+      user: { ...guestUser, isGuest: true }
+    });
+  } catch (err) {
+    console.error("Guest Login error:", err);
+    res.status(500).json({ error: "Failed to initialize guest session" });
+  }
+};
 
 const login = async (req, res) => {
   try {
-    const { email, password } = req.body; // 'email' field accepts username OR email
+    const { email, password } = req.body;
 
     if (!email || !password) {
       return res.status(400).json({ error: "Username/email and password are required" });
     }
 
-    // Accept either username or email
-    const [rows] = await db.query(
-      "SELECT * FROM users WHERE (email = ? OR username = ?) AND is_active = 1",
-      [email, email]
-    );
+    const user = await User.findOne({
+      $or: [{ email: email }, { username: email }],
+      is_active: true
+    });
 
-    if (rows.length === 0) {
+    if (!user) {
       return res.status(401).json({ error: "Invalid username/email or password" });
     }
 
-    const user = rows[0];
     const isMatch = await bcrypt.compare(password, user.password);
 
     if (!isMatch) {
@@ -28,21 +54,23 @@ const login = async (req, res) => {
     }
 
     const token = jwt.sign(
-      { id: user.id, name: user.name, email: user.email, role: user.role },
+      { id: user._id, name: user.name, email: user.email, role: user.role },
       process.env.JWT_SECRET || "dev_secret_key",
       { expiresIn: "8h" }
     );
 
-    // Log login
-    await db.query(
-      "INSERT INTO AuditLog (Operation, TableAffected, User, performed_by, action, details) VALUES (?, ?, ?, ?, ?, ?)",
-      ["LOGIN", "users", user.email, user.id, "USER_LOGIN", `${user.role} '${user.name}' logged in`]
-    );
+    await AuditLog.logOperation({
+      Operation: 'LOGIN',
+      TableAffected: 'users',
+      User: user.email,
+      RecordID: user._id,
+      Details: `${user.role} '${user.name}' logged in`
+    });
 
     res.json({
       success: true,
       token,
-      user: { id: user.id, name: user.name, email: user.email, role: user.role }
+      user: { id: user._id, name: user.name, email: user.email, role: user.role }
     });
   } catch (err) {
     console.error("Login error:", err);
@@ -55,25 +83,27 @@ const changePassword = async (req, res) => {
     const { currentPassword, newPassword } = req.body;
     const userId = req.user.id;
 
-    const [rows] = await db.query("SELECT * FROM users WHERE id = ?", [userId]);
-    if (rows.length === 0) {
+    const user = await User.findById(userId);
+    if (!user) {
       return res.status(404).json({ error: "User not found" });
     }
 
-    const user = rows[0];
     const isMatch = await bcrypt.compare(currentPassword, user.password);
 
     if (!isMatch) {
       return res.status(401).json({ error: "Incorrect current password" });
     }
 
-    const hashedNewPassword = await bcrypt.hash(newPassword, 10);
-    await db.query("UPDATE users SET password = ? WHERE id = ?", [hashedNewPassword, userId]);
+    user.password = await bcrypt.hash(newPassword, 10);
+    await user.save();
 
-    await db.query(
-      "INSERT INTO AuditLog (Operation, TableAffected, User, performed_by, action, details) VALUES (?, ?, ?, ?, ?, ?)",
-      ["UPDATE", "users", user.email, userId, "CHANGE_PASSWORD", "Password changed"]
-    );
+    await AuditLog.logOperation({
+      Operation: 'UPDATE',
+      TableAffected: 'users',
+      User: user.email,
+      RecordID: user._id,
+      Details: "Password changed"
+    });
 
     res.json({ success: true, message: "Password updated successfully" });
   } catch (err) {
@@ -87,28 +117,20 @@ const updateProfile = async (req, res) => {
     const { name, email } = req.body;
     const userId = req.user.id;
 
-    // Check email uniqueness (excluding current user)
     if (email) {
-      const [existing] = await db.query(
-        "SELECT id FROM users WHERE email = ? AND id != ?",
-        [email, userId]
-      );
-      if (existing.length > 0) {
+      const existing = await User.findOne({ email, _id: { $ne: userId } });
+      if (existing) {
         return res.status(400).json({ error: "Email already in use" });
       }
     }
 
-    await db.query(
-      "UPDATE users SET name = COALESCE(?, name), email = COALESCE(?, email) WHERE id = ?",
-      [name || null, email || null, userId]
-    );
+    const updatedUser = await User.findByIdAndUpdate(
+      userId,
+      { $set: { name, email } },
+      { new: true }
+    ).select('-password');
 
-    const [updated] = await db.query(
-      "SELECT id, name, email, role FROM users WHERE id = ?",
-      [userId]
-    );
-
-    res.json({ success: true, user: updated[0] });
+    res.json({ success: true, user: updatedUser });
   } catch (err) {
     console.error("Update profile error:", err);
     res.status(500).json({ error: "Internal server error" });
@@ -118,8 +140,8 @@ const updateProfile = async (req, res) => {
 const forgotPassword = async (req, res) => {
   try {
     const { email } = req.body;
-    const [rows] = await db.query("SELECT id FROM users WHERE email = ?", [email]);
-    if (rows.length === 0) {
+    const user = await User.findOne({ email });
+    if (!user) {
       return res.status(400).json({ error: "Email not found" });
     }
     res.json({ success: true, message: "A password reset link has been sent to your email" });
@@ -128,4 +150,4 @@ const forgotPassword = async (req, res) => {
   }
 };
 
-module.exports = { login, changePassword, updateProfile, forgotPassword };
+module.exports = { login, changePassword, updateProfile, forgotPassword, guestLogin };

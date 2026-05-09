@@ -1,27 +1,17 @@
-const pool = require("../db");
+const mongoose = require('mongoose');
+const Transaction = require("../models/transactionModel");
+const Account = require("../models/accountModel");
+const AuditLog = require("../models/auditLogModel");
 
 const TransactionController = {
   async getAllTransactions(req, res) {
     try {
-      let query, params = [];
+      let transactions;
       if (req.user.role === "admin") {
-        query = `
-          SELECT t.*, u.name as created_by_name
-          FROM Transaction t
-          LEFT JOIN users u ON u.id = t.created_by
-          ORDER BY t.DateTime DESC
-        `;
+        transactions = await Transaction.TransactionInternal.find().sort({ dateTime: -1 });
       } else {
-        query = `
-          SELECT t.*, u.name as created_by_name
-          FROM Transaction t
-          LEFT JOIN users u ON u.id = t.created_by
-          WHERE t.created_by = ?
-          ORDER BY t.DateTime DESC
-        `;
-        params = [req.user.id];
+        transactions = await Transaction.TransactionInternal.find({ created_by: req.user.id }).sort({ dateTime: -1 });
       }
-      const [transactions] = await pool.query(query, params);
       res.json(transactions);
     } catch (err) {
       res.status(500).json({ success: false, error: err.message });
@@ -30,54 +20,51 @@ const TransactionController = {
 
   async transfer(req, res) {
     const { FromAccount, ToAccount, Amount } = req.body;
-    const conn = await pool.getConnection();
+    const session = await mongoose.startSession();
+    session.startTransaction();
 
     try {
-      await conn.beginTransaction();
+      const sender = await Account.AccountModelInternal.findOne({ accountNo: FromAccount }).session(session);
+      if (!sender) throw new Error("Sender account not found");
+      if (sender.balance < Amount) throw new Error("Insufficient balance");
 
-      const [sender] = await conn.query(
-        "SELECT Balance, created_by FROM Account WHERE AccountNo = ?",
-        [FromAccount]
-      );
-      if (sender.length === 0) throw new Error("Sender account not found");
-      if (sender[0].Balance < Amount) throw new Error("Insufficient balance");
-
-      if (req.user.role === "employee" && sender[0].created_by !== req.user.id) {
+      if (req.user.role === "employee" && sender.created_by?.toString() !== req.user.id) {
         throw new Error("You can only transfer from your own accounts");
       }
 
-      const [receiver] = await conn.query(
-        "SELECT Balance FROM Account WHERE AccountNo = ?",
-        [ToAccount]
-      );
-      if (receiver.length === 0) throw new Error("Receiver account not found");
+      const receiver = await Account.AccountModelInternal.findOne({ accountNo: ToAccount }).session(session);
+      if (!receiver) throw new Error("Receiver account not found");
 
-      await conn.query(
-        "UPDATE Account SET Balance = Balance - ? WHERE AccountNo = ?",
-        [Amount, FromAccount]
-      );
-      await conn.query(
-        "UPDATE Account SET Balance = Balance + ? WHERE AccountNo = ?",
-        [Amount, ToAccount]
-      );
+      sender.balance -= parseFloat(Amount);
+      receiver.balance += parseFloat(Amount);
 
-      const [txResult] = await conn.query(
-        "INSERT INTO Transaction (FromAccount, ToAccount, Amount, Type, created_by) VALUES (?, ?, ?, 'Transfer', ?)",
-        [FromAccount, ToAccount, Amount, req.user.id]
-      );
+      await sender.save({ session });
+      await receiver.save({ session });
 
-      await conn.query(
-        "INSERT INTO AuditLog (Operation, TableAffected, User, performed_by, action, record_id, details) VALUES (?, ?, ?, ?, ?, ?, ?)",
-        ["COMMIT", "Transaction", req.user.email, req.user.id, "TRANSFER", txResult.insertId, `Transfer of $${Amount} from account #${FromAccount} to #${ToAccount}`]
-      );
+      const transaction = new Transaction.TransactionInternal({
+        fromAccount: FromAccount,
+        toAccount: ToAccount,
+        amount: Amount,
+        type: 'Transfer',
+        created_by: req.user.id
+      });
+      const txResult = await transaction.save({ session });
 
-      await conn.commit();
+      await AuditLog.logOperation({
+        Operation: "COMMIT",
+        TableAffected: "Transaction",
+        User: req.user.email,
+        RecordID: txResult._id,
+        Details: `Transfer of $${Amount} from account #${FromAccount} to #${ToAccount}`
+      });
+
+      await session.commitTransaction();
+      session.endSession();
       res.json({ success: true, message: "Transfer successful" });
     } catch (err) {
-      await conn.rollback();
+      await session.abortTransaction();
+      session.endSession();
       res.status(500).json({ success: false, error: err.message });
-    } finally {
-      conn.release();
     }
   },
 };

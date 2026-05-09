@@ -18,6 +18,35 @@ const auditLogRoutes = require("./routes/auditLogRoutes");
 const authRoutes = require("./routes/authRoutes");
 const employeeRoutes = require("./routes/employeeRoutes");
 const adminRoutes = require("./routes/adminRoutes");
+const { asyncLocalStorage } = require("./db");
+const cron = require("node-cron");
+const { cleanupGuestSessions } = require("./utils/guestUtils");
+
+// Extract Guest Session ID globally
+app.use((req, res, next) => {
+  let guestDbName = null;
+  const authHeader = req.headers.authorization;
+  if (authHeader && authHeader.startsWith('Bearer ')) {
+    const token = authHeader.split(' ')[1];
+    try {
+      const jwt = require('jsonwebtoken');
+      const payload = jwt.verify(token, process.env.JWT_SECRET || 'dev_secret_key');
+      if (payload.guestDbName) {
+        guestDbName = payload.guestDbName;
+      }
+    } catch(e) {}
+  }
+  
+  asyncLocalStorage.run({ guestDbName }, () => {
+    next();
+  });
+});
+
+// Run cleanup job every 30 minutes
+cron.schedule("*/30 * * * *", () => {
+  console.log("🧹 Running scheduled guest session cleanup...");
+  cleanupGuestSessions();
+});
 
 // Assign routes
 app.use("/customers", customerRoutes);
