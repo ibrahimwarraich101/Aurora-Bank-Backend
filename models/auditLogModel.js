@@ -1,31 +1,38 @@
-const db = require("../db");
+const mongoose = require('mongoose');
+
+const auditLogSchema = new mongoose.Schema({
+  operation: { type: String, required: true },
+  tableAffected: { type: String, required: true },
+  recordID: { type: mongoose.Schema.Types.Mixed, default: null },
+  user: { type: String, default: 'system' },
+  details: { type: String, default: null },
+  dateTime: { type: Date, default: Date.now }
+});
+
+const AuditLog = mongoose.model('AuditLog', auditLogSchema);
 
 const AuditLogModel = {
   async logOperation({ Operation, TableAffected, RecordID = null, User = 'system', Details = null }) {
     try {
-      await db.query(
-        "INSERT INTO AuditLog (Operation, TableAffected, RecordID, User, Details) VALUES (?, ?, ?, ?, ?)",
-        [Operation, TableAffected, RecordID, User, Details]
-      );
+      const log = new AuditLog({
+        operation: Operation,
+        tableAffected: TableAffected,
+        recordID: RecordID,
+        user: User,
+        details: Details
+      });
+      await log.save();
     } catch (err) {
       console.error("Audit log failed:", err.message);
-      // Don't throw error - audit failure shouldn't stop operation
     }
   },
 
   async getAllLogs() {
-    const [rows] = await db.query(
-      "SELECT * FROM AuditLog ORDER BY DateTime DESC LIMIT 100"
-    );
-    return rows;
+    return await AuditLog.find().sort({ dateTime: -1 }).limit(100);
   },
 
   async getLogsByTable(tableName) {
-    const [rows] = await db.query(
-      "SELECT * FROM AuditLog WHERE TableAffected = ? ORDER BY DateTime DESC LIMIT 50",
-      [tableName]
-    );
-    return rows;
+    return await AuditLog.find({ tableAffected: tableName }).sort({ dateTime: -1 }).limit(50);
   }
 };
 

@@ -1,36 +1,37 @@
-const pool = require('../db');
-const AccountModel = require('../models/accountModel');
-const AuditLogController = require('./auditLogController');
+const mongoose = require('mongoose');
+const Account = require('../models/accountModel');
+const Customer = require('../models/customerModel');
+const Transaction = require('../models/transactionModel');
+const AuditLog = require('../models/auditLogModel');
 
 const AccountController = {
   // Create account
   async createAccount(req, res) {
     try {
       const { CustomerID, Type, Balance } = req.body;
-      const accountId = await AccountModel.createAccount({ CustomerID, Type, Balance });
 
-      // Log the operation
-      await AuditLogController.logOperation({
-        operation: 'INSERT',
-        table: 'Account',
-        recordId: accountId,
-        details: `New ${Type} account created with balance $${Balance}`,
-        userAction: 'CREATE_ACCOUNT',
-        status: 'SUCCESS'
+      if (req.user.role === "employee") {
+        const customer = await Customer.CustomerModel.findOne({ _id: CustomerID, created_by: req.user.id });
+        if (!customer) {
+          return res.status(403).json({ error: "You can only create accounts for your own customers" });
+        }
+      }
+
+      const accountId = await Account.createAccount({ CustomerID, Type, Balance });
+      
+      // Update created_by
+      await Account.AccountModelInternal.findByIdAndUpdate(accountId, { created_by: req.user.id });
+
+      await AuditLog.logOperation({
+        Operation: "INSERT",
+        TableAffected: "Account",
+        User: req.user.email,
+        RecordID: accountId,
+        Details: `New ${Type} account created with balance $${Balance}`
       });
 
       res.json({ success: true, AccountNo: accountId });
     } catch (err) {
-      // Log the failure
-      await AuditLogController.logOperation({
-        operation: 'INSERT',
-        table: 'Account',
-        recordId: null,
-        details: `Failed to create account: ${err.message}`,
-        userAction: 'CREATE_ACCOUNT',
-        status: 'FAILED'
-      });
-
       res.status(500).json({ success: false, error: err.message });
     }
   },
@@ -38,8 +39,50 @@ const AccountController = {
   // Get all accounts
   async getAccounts(req, res) {
     try {
-      const accounts = await AccountModel.getAccounts();
-      res.json(accounts);
+      let accounts;
+      if (req.user.role === "admin") {
+        accounts = await Account.AccountModelInternal.find()
+          .populate('customerId', 'name cnic')
+          .sort({ createdAt: -1 });
+      } else {
+        accounts = await Account.AccountModelInternal.find({ created_by: req.user.id })
+          .populate('customerId', 'name cnic')
+          .sort({ createdAt: -1 });
+      }
+
+      // Format for frontend
+      const formatted = accounts.map(acc => ({
+        AccountNo: acc.accountNo,
+        Type: acc.type,
+        Balance: acc.balance,
+        Status: acc.status,
+        CustomerName: acc.customerId?.name || 'N/A',
+        CNIC: acc.customerId?.cnic || 'N/A',
+        CreatedAt: acc.createdAt
+      }));
+
+      res.json(formatted);
+    } catch (err) {
+      res.status(500).json({ error: err.message });
+    }
+  },
+
+  // Get accounts for specific customer
+  async getAccountsByCustomer(req, res) {
+    try {
+      const { customerId } = req.params;
+      let accounts;
+
+      if (req.user.role === "admin") {
+        accounts = await Account.AccountModelInternal.find({ customerId });
+      } else {
+        // Employee: validate customer belongs to them
+        const customer = await Customer.CustomerModel.findOne({ _id: customerId, created_by: req.user.id });
+        if (!customer) return res.status(403).json({ error: "Access denied" });
+        accounts = await Account.AccountModelInternal.find({ customerId });
+      }
+
+      res.json(accounts.map(a => ({ AccountNo: a.accountNo, Type: a.type, Balance: a.balance })));
     } catch (err) {
       res.status(500).json({ error: err.message });
     }
@@ -48,125 +91,112 @@ const AccountController = {
   // Deposit
   async deposit(req, res) {
     const { AccountNo, Amount } = req.body;
-    const connection = await pool.getConnection();
+    const session = await mongoose.startSession();
+    session.startTransaction();
     try {
-      await connection.beginTransaction();
+      const account = await Account.AccountModelInternal.findOne({ accountNo: AccountNo }).session(session);
+      if (!account) throw new Error("Account not found");
 
-      const [account] = await connection.query("SELECT * FROM Account WHERE AccountNo = ?", [AccountNo]);
-      if (account.length === 0) throw new Error("Account not found");
+      if (req.user.role === "employee" && account.created_by?.toString() !== req.user.id) {
+        throw new Error("You can only deposit into your own accounts");
+      }
 
-      const newBalance = parseFloat(account[0].Balance) + parseFloat(Amount);
-      await connection.query("UPDATE Account SET Balance = ? WHERE AccountNo = ?", [newBalance, AccountNo]);
+      account.balance += parseFloat(Amount);
+      await account.save({ session });
 
-      // Record transaction
-      await connection.query(
-        "INSERT INTO Transaction (ToAccount, Amount, Type) VALUES (?, ?, 'Deposit')",
-        [AccountNo, Amount]
-      );
+      const transaction = new Transaction.TransactionInternal({
+        toAccount: AccountNo,
+        amount: Amount,
+        type: 'Deposit',
+        created_by: req.user.id
+      });
+      const txResult = await transaction.save({ session });
 
-      // Log COMMIT operation
-      await connection.query(
-        `INSERT INTO AuditLog (Operation, TableAffected, RecordID, Details, UserAction, Status) 
-         VALUES ('COMMIT', 'Account', ?, ?, 'DEPOSIT', 'SUCCESS')`,
-        [AccountNo, `Deposit of $${Amount}. New balance: $${newBalance.toFixed(2)}`]
-      );
+      await AuditLog.logOperation({
+        Operation: "COMMIT",
+        TableAffected: "Account",
+        User: req.user.email,
+        RecordID: txResult._id,
+        Details: `Deposit of $${Amount} to account #${AccountNo}. New balance: $${account.balance}`
+      });
 
-      await connection.commit();
-      res.json({ success: true, newBalance });
+      await session.commitTransaction();
+      session.endSession();
+      res.json({ success: true, newBalance: account.balance });
     } catch (err) {
-      await connection.rollback();
-
-      // Log ROLLBACK operation
-      await connection.query(
-        `INSERT INTO AuditLog (Operation, TableAffected, RecordID, Details, UserAction, Status) 
-         VALUES ('ROLLBACK', 'Account', ?, ?, 'DEPOSIT', 'FAILED')`,
-        [AccountNo, `Deposit failed: ${err.message}`]
-      );
-
+      await session.abortTransaction();
+      session.endSession();
       res.status(500).json({ success: false, error: err.message });
-    } finally {
-      connection.release();
     }
   },
 
   // Withdraw
   async withdraw(req, res) {
     const { AccountNo, Amount } = req.body;
-    const connection = await pool.getConnection();
+    const session = await mongoose.startSession();
+    session.startTransaction();
     try {
-      await connection.beginTransaction();
+      const account = await Account.AccountModelInternal.findOne({ accountNo: AccountNo }).session(session);
+      if (!account) throw new Error("Account not found");
+      if (account.balance < Amount) throw new Error("Insufficient balance");
 
-      const [account] = await connection.query("SELECT * FROM Account WHERE AccountNo = ?", [AccountNo]);
-      if (account.length === 0) throw new Error("Account not found");
-      if (parseFloat(account[0].Balance) < Amount) throw new Error("Insufficient balance");
+      if (req.user.role === "employee" && account.created_by?.toString() !== req.user.id) {
+        throw new Error("You can only withdraw from your own accounts");
+      }
 
-      const newBalance = parseFloat(account[0].Balance) - parseFloat(Amount);
-      await connection.query("UPDATE Account SET Balance = ? WHERE AccountNo = ?", [newBalance, AccountNo]);
+      account.balance -= parseFloat(Amount);
+      await account.save({ session });
 
-      await connection.query(
-        "INSERT INTO Transaction (FromAccount, Amount, Type) VALUES (?, ?, 'Withdraw')",
-        [AccountNo, Amount]
-      );
+      const transaction = new Transaction.TransactionInternal({
+        fromAccount: AccountNo,
+        amount: Amount,
+        type: 'Withdraw',
+        created_by: req.user.id
+      });
+      const txResult = await transaction.save({ session });
 
-      // Log COMMIT operation
-      await connection.query(
-        `INSERT INTO AuditLog (Operation, TableAffected, RecordID, Details, UserAction, Status) 
-         VALUES ('COMMIT', 'Account', ?, ?, 'WITHDRAW', 'SUCCESS')`,
-        [AccountNo, `Withdrawal of $${Amount}. New balance: $${newBalance.toFixed(2)}`]
-      );
+      await AuditLog.logOperation({
+        Operation: "COMMIT",
+        TableAffected: "Account",
+        User: req.user.email,
+        RecordID: txResult._id,
+        Details: `Withdrawal of $${Amount} from account #${AccountNo}. New balance: $${account.balance}`
+      });
 
-      await connection.commit();
-      res.json({ success: true, newBalance });
+      await session.commitTransaction();
+      session.endSession();
+      res.json({ success: true, newBalance: account.balance });
     } catch (err) {
-      await connection.rollback();
-
-      // Log ROLLBACK operation
-      await connection.query(
-        `INSERT INTO AuditLog (Operation, TableAffected, RecordID, Details, UserAction, Status) 
-         VALUES ('ROLLBACK', 'Account', ?, ?, 'WITHDRAW', 'FAILED')`,
-        [AccountNo, `Withdrawal failed: ${err.message}`]
-      );
-
+      await session.abortTransaction();
+      session.endSession();
       res.status(500).json({ success: false, error: err.message });
-    } finally {
-      connection.release();
     }
   },
 
   // Delete account
   async deleteAccount(req, res) {
     const { id } = req.params;
-    const connection = await pool.getConnection();
-
     try {
-      await connection.beginTransaction();
+      const account = await Account.AccountModelInternal.findOne({ accountNo: id });
+      if (!account) throw new Error("Account not found");
 
-      // Delete account
-      const [result] = await connection.query("DELETE FROM Account WHERE AccountNo = ?", [id]);
-      if (result.affectedRows === 0) throw new Error("Account not found");
+      if (req.user.role === "employee" && account.created_by?.toString() !== req.user.id) {
+        throw new Error("You can only delete your own accounts");
+      }
 
-      // Record deletion in AuditLog
-      await connection.query(
-        `INSERT INTO AuditLog (Operation, TableAffected, RecordID, Details, UserAction, Status)
-         VALUES ('DELETE', 'Account', ?, ?, 'DELETE_ACCOUNT', 'SUCCESS')`,
-        [id, `Account ${id} deleted successfully`]
-      );
+      await Account.AccountModelInternal.deleteOne({ accountNo: id });
 
-      await connection.commit();
+      await AuditLog.logOperation({
+        Operation: "DELETE",
+        TableAffected: "Account",
+        User: req.user.email,
+        RecordID: id,
+        Details: `Account ${id} deleted`
+      });
+
       res.json({ success: true, message: `Account ${id} deleted` });
     } catch (err) {
-      await connection.rollback();
-
-      // Log failure
-      await connection.query(
-        `INSERT INTO AuditLog (Operation, TableAffected, RecordID, Details, UserAction, Status)
-         VALUES ('ROLLBACK', 'Account', ?, ?, 'DELETE_ACCOUNT', 'FAILED')`,
-        [id, `Delete failed: ${err.message}`]
-      );
-
       res.status(500).json({ success: false, error: err.message });
-    } finally {
-      connection.release();
     }
   },
 };

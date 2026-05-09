@@ -1,48 +1,48 @@
-const db = require("../db");
-const AuditLog = require("./auditLogModel");
+const mongoose = require('mongoose');
+const AuditLog = require('./auditLogModel');
+
+const transactionSchema = new mongoose.Schema({
+  fromAccount: { type: String, default: null },
+  toAccount: { type: String, default: null },
+  amount: { type: Number, required: true },
+  type: { type: String, required: true },
+  dateTime: { type: Date, default: Date.now }
+});
+
+const TransactionInternal = mongoose.model('Transaction', transactionSchema);
 
 const TransactionModel = {
   async recordTransaction({ FromAccount = null, ToAccount = null, Amount, Type }) {
-    const [result] = await db.query(
-      "INSERT INTO Transaction (FromAccount, ToAccount, Amount, Type) VALUES (?, ?, ?, ?)",
-      [FromAccount, ToAccount, Amount, Type]
-    );
+    const transaction = new TransactionInternal({
+      fromAccount: FromAccount,
+      toAccount: ToAccount,
+      amount: Amount,
+      type: Type
+    });
 
-    // Log to audit
+    const result = await transaction.save();
+
     await AuditLog.logOperation({
       Operation: 'INSERT',
       TableAffected: 'Transaction',
-      RecordID: result.insertId,
+      RecordID: result._id,
       Details: `${Type}: ${Amount} from ${FromAccount || 'N/A'} to ${ToAccount || 'N/A'}`
     });
 
-    return result.insertId;
+    return result._id;
   },
 
   async getAllTransactions() {
-    const [rows] = await db.query(`
-      SELECT 
-        t.*,
-        af.CustomerID as FromCustomerID,
-        at.CustomerID as ToCustomerID
-      FROM Transaction t
-      LEFT JOIN Account af ON t.FromAccount = af.AccountNo
-      LEFT JOIN Account at ON t.ToAccount = at.AccountNo
-      ORDER BY t.DateTime DESC
-      LIMIT 100
-    `);
-    return rows;
+    return await TransactionInternal.find().sort({ dateTime: -1 }).limit(100);
   },
 
   async getTransactionsByAccount(AccountNo) {
-    const [rows] = await db.query(`
-      SELECT * FROM Transaction 
-      WHERE FromAccount = ? OR ToAccount = ?
-      ORDER BY DateTime DESC
-      LIMIT 50
-    `, [AccountNo, AccountNo]);
-    return rows;
+    return await TransactionInternal.find({
+      $or: [{ fromAccount: AccountNo }, { toAccount: AccountNo }]
+    }).sort({ dateTime: -1 }).limit(50);
   }
 };
 
 module.exports = TransactionModel;
+module.exports.TransactionInternal = TransactionInternal;
+module.exports.transactionSchema = transactionSchema;

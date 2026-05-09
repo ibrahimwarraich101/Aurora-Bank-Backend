@@ -1,71 +1,83 @@
-const db = require('../db');
+const mongoose = require('mongoose');
 const AuditLog = require('./auditLogModel');
+const { CustomerModel } = require('./customerModel');
+
+const accountSchema = new mongoose.Schema({
+  accountNo: { type: String, unique: true, required: true },
+  customerId: { type: mongoose.Schema.Types.ObjectId, ref: 'Customer', required: true },
+  type: { type: String, enum: ['Savings', 'Current', 'Business'], required: true },
+  balance: { type: Number, default: 0 },
+  status: { type: String, default: 'Active' },
+  createdAt: { type: Date, default: Date.now }
+});
+
+const AccountModelInternal = mongoose.model('Account', accountSchema);
 
 const AccountModel = {
   async createAccount({ CustomerID, Type, Balance = 0 }) {
-    // Validate input
     if (!CustomerID || !Type) {
       throw new Error("CustomerID and Type are required");
     }
 
-    // Check if customer exists
-    const [customer] = await db.query(
-      "SELECT CustomerID FROM Customer WHERE CustomerID = ?",
-      [CustomerID]
-    );
-    
-    if (customer.length === 0) {
+    const customerExists = await CustomerModel.findById(CustomerID);
+    if (!customerExists) {
       throw new Error("Customer not found");
     }
 
-    const [result] = await db.query(
-      "INSERT INTO Account (CustomerID, Type, Balance) VALUES (?, ?, ?)",
-      [CustomerID, Type, Balance]
-    );
+    // Simple account number generation
+    const accountNo = 'AUR' + Date.now().toString().slice(-8);
 
-    // Log to audit
+    const account = new AccountModelInternal({
+      accountNo,
+      customerId: CustomerID,
+      type: Type,
+      balance: Balance
+    });
+
+    const result = await account.save();
+
     await AuditLog.logOperation({
       Operation: 'INSERT',
       TableAffected: 'Account',
-      RecordID: result.insertId,
+      RecordID: result._id,
       Details: `Created ${Type} account for Customer ${CustomerID}`
     });
 
-    return result.insertId;
+    return result._id;
   },
 
   async getAccounts() {
-    const [rows] = await db.query(`
-      SELECT 
-        a.AccountNo, 
-        a.Type, 
-        a.Balance, 
-        a.Status,
-        c.Name as CustomerName,
-        c.CNIC
-      FROM Account a
-      JOIN Customer c ON a.CustomerID = c.CustomerID
-      ORDER BY a.AccountNo DESC
-    `);
-    return rows;
+    // Populate customer details to mimic the JOIN
+    const accounts = await AccountModelInternal.find()
+      .populate('customerId', 'name cnic')
+      .sort({ createdAt: -1 });
+
+    return accounts.map(acc => ({
+      AccountNo: acc.accountNo,
+      Type: acc.type,
+      Balance: acc.balance,
+      Status: acc.status,
+      CustomerName: acc.customerId ? acc.customerId.name : 'N/A',
+      CNIC: acc.customerId ? acc.customerId.cnic : 'N/A'
+    }));
   },
 
   async getAccountById(AccountNo) {
-    const [rows] = await db.query(
-      "SELECT * FROM Account WHERE AccountNo = ?",
-      [AccountNo]
-    );
-    return rows[0];
+    return await AccountModelInternal.findOne({ accountNo: AccountNo });
   },
-async deleteAccount(id) {
-  await pool.query("DELETE FROM Account WHERE AccountNo = ?", [id]);
-},
+
+  async deleteAccount(id) {
+    await AccountModelInternal.deleteOne({ accountNo: id });
+  },
+
   async updateBalance(AccountNo, newBalance) {
-    await db.query(
-      "UPDATE Account SET Balance = ? WHERE AccountNo = ?",
-      [newBalance, AccountNo]
+    await AccountModelInternal.updateOne(
+      { accountNo: AccountNo },
+      { $set: { balance: newBalance } }
     );
   }
 };
 
 module.exports = AccountModel;
+module.exports.AccountModelInternal = AccountModelInternal;
+module.exports.accountSchema = accountSchema;

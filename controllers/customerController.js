@@ -1,20 +1,16 @@
-const pool = require("../db");
-
-const Customer = {
-  getAll: async () => {
-    const [rows] = await pool.query("SELECT * FROM Customer");
-    return rows;
-  },
-
-  create: async (data) => {
-    const [result] = await pool.query("INSERT INTO Customer SET ?", data);
-    return result;
-  }
-};
+const Customer = require("../models/customerModel");
+const User = require("../models/userModel");
+const Account = require("../models/accountModel");
+const AuditLog = require("../models/auditLogModel");
 
 const getAllCustomers = async (req, res) => {
   try {
-    const customers = await Customer.getAll();
+    let customers;
+    if (req.user.role === "admin") {
+      customers = await Customer.CustomerModel.find().sort({ createdAt: -1 });
+    } else {
+      customers = await Customer.CustomerModel.find({ created_by: req.user.id }).sort({ createdAt: -1 });
+    }
     res.json(customers);
   } catch (err) {
     res.status(500).json({ error: err.message });
@@ -22,71 +18,59 @@ const getAllCustomers = async (req, res) => {
 };
 
 const createCustomer = async (req, res) => {
-  const connection = await pool.getConnection();
   try {
-    await connection.beginTransaction();
-    
-    const result = await Customer.create(req.body);
-    
-    // Log to AuditLog
-    await connection.query(
-      "INSERT INTO AuditLog (Operation, TableAffected, User, DateTime) VALUES (?, ?, ?, NOW())",
-      ["INSERT", "Customer", req.body.Name || "Unknown"]
-    );
-    
-    await connection.commit();
-    res.json({ message: "Customer created", id: result.insertId });
+    const customerData = {
+      Name: req.body.name,
+      CNIC: req.body.cnic,
+      Contact: req.body.contact,
+      created_by: req.user.id
+    };
+
+    const result = await Customer.create(customerData);
+
+    await AuditLog.logOperation({
+      Operation: "INSERT",
+      TableAffected: "Customer",
+      User: req.user.email,
+      RecordID: result._id,
+      Details: `Customer ${req.body.name} created`
+    });
+
+    res.json({ message: "Customer created", id: result._id });
   } catch (err) {
-    await connection.rollback();
     res.status(500).json({ error: err.message });
-  } finally {
-    connection.release();
   }
 };
 
 const deleteCustomer = async (req, res) => {
   const { id } = req.params;
-  const connection = await pool.getConnection();
-  
+
   try {
-    await connection.beginTransaction();
-    
-    // Check if customer has accounts
-    const [accounts] = await connection.query(
-      "SELECT COUNT(*) as count FROM Account WHERE CustomerID = ?",
-      [id]
-    );
-    
-    if (accounts[0].count > 0) {
+    const accountCount = await Account.AccountModelInternal.countDocuments({ customerId: id });
+    if (accountCount > 0) {
       throw new Error("Cannot delete customer with existing accounts. Delete accounts first.");
     }
-    
-    // Get customer name for audit log
-    const [customer] = await connection.query(
-      "SELECT Name FROM Customer WHERE CustomerID = ?",
-      [id]
-    );
-    
-    if (customer.length === 0) {
-      throw new Error("Customer not found");
+
+    const customer = await Customer.CustomerModel.findById(id);
+    if (!customer) throw new Error("Customer not found");
+
+    if (req.user.role === "employee" && customer.created_by?.toString() !== req.user.id) {
+      throw new Error("You can only delete customers you created");
     }
-    
-    // Delete customer
-    await connection.query("DELETE FROM Customer WHERE CustomerID = ?", [id]);
-    
-    // Log to AuditLog
-    await connection.query(
-      "INSERT INTO AuditLog (Operation, TableAffected, User, DateTime) VALUES (?, ?, ?, NOW())",
-      ["DELETE", "Customer", customer[0].Name]
-    );
-    
-    await connection.commit();
+
+    await Customer.CustomerModel.findByIdAndDelete(id);
+
+    await AuditLog.logOperation({
+      Operation: "DELETE",
+      TableAffected: "Customer",
+      User: req.user.email,
+      RecordID: id,
+      Details: `Customer ${customer.name} deleted`
+    });
+
     res.json({ message: "Customer deleted successfully" });
   } catch (err) {
-    await connection.rollback();
     res.status(500).json({ error: err.message });
-  } finally {
-    connection.release();
   }
 };
 
