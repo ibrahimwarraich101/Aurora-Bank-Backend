@@ -34,6 +34,16 @@ const AuditLogController = {
     } catch (err) {
       res.status(500).json({ success: false, error: err.message });
     }
+  },
+
+  async getLogsByOperation(req, res) {
+    try {
+      const { operation } = req.params;
+      const logs = await AuditLogModel.getLogsByOperation(operation);
+      res.json(logs);
+    } catch (err) {
+      res.status(500).json({ success: false, error: err.message });
+    }
   }
 };
 
