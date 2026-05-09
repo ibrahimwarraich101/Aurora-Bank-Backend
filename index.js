@@ -6,10 +6,11 @@ dotenv.config();
 const app = express();
 const PORT = process.env.PORT || 5000;
 
-// Update CORS to allow both local testing and production URL
+// Update CORS to allow both local testing and production URLs
 const allowedOrigins = [
   "http://localhost:5173",
-  "https://aurora-bankfrontend.vercel.app"
+  "https://aurora-bankfrontend.vercel.app",
+  "https://bank-aurora.vercel.app"
 ];
 
 app.use(cors({
