@@ -1,28 +1,45 @@
 const nodemailer = require("nodemailer");
 
+// Better configuration for Gmail using explicit host and port
 const transporter = nodemailer.createTransport({
-  service: "gmail",
-  pool: true, // Keep the connection open for faster subsequent sends
-  maxConnections: 5,
-  maxMessages: 100,
+  host: "smtp.gmail.com",
+  port: 465,
+  secure: true, // Use SSL/TLS
   auth: {
     user: process.env.EMAIL_USER,
     pass: process.env.EMAIL_PASS,
   },
+  // Remove pool for now to ensure every send starts a fresh connection, 
+  // which is more reliable for low-volume applications.
 });
 
-// Verify connection on startup — non-fatal, won't crash the server
-try {
-  transporter.verify((error) => {
-    if (error) {
-      console.warn("⚠️  Email system warning (non-fatal):", error.message);
-    } else {
-      console.log("✅ Email System Ready (Pooled)");
+// Verify connection on startup with more detailed logging
+transporter.verify((error, success) => {
+  if (error) {
+    console.error("❌ Email System Error:", error);
+    console.log("Check if EMAIL_USER and EMAIL_PASS are correct in your .env file.");
+  } else {
+    console.log("✅ Email System Ready (Direct Connection)");
+  }
+});
+
+/**
+ * Generic helper to send mail with error logging
+ */
+const sendMailHelper = async (mailOptions, recipientEmail) => {
+  try {
+    const info = await transporter.sendMail(mailOptions);
+    console.log(`✅ Email sent to ${recipientEmail}: ${info.messageId}`);
+    return info;
+  } catch (error) {
+    console.error(`❌ Error sending email to ${recipientEmail}:`, error.message);
+    // Provide more specific hints for common Gmail errors
+    if (error.message.includes('Invalid login')) {
+      console.error("Hint: Check if your Google App Password is still valid.");
     }
-  });
-} catch (e) {
-  console.warn("⚠️  Email transporter could not be initialized:", e.message);
-}
+    throw error; 
+  }
+};
 
 const sendEmployeeWelcomeEmail = async (employeeData, baseUrl) => {
   const { name, email, username, password } = employeeData;
@@ -108,8 +125,7 @@ const sendEmployeeWelcomeEmail = async (employeeData, baseUrl) => {
     `,
   };
 
-  return transporter.sendMail(mailOptions);
-
+  return sendMailHelper(mailOptions, email);
 };
 
 const sendProfileUpdateEmail = async (employeeData, updatedFields) => {
@@ -180,7 +196,7 @@ const sendProfileUpdateEmail = async (employeeData, updatedFields) => {
     `,
   };
 
-  return transporter.sendMail(mailOptions);
+  return sendMailHelper(mailOptions, email);
 };
 
 // ── Status Change Email (Activated / Deactivated) ──────────────────────────
@@ -224,7 +240,7 @@ const sendStatusChangeEmail = async (employeeData, isActive) => {
       </div>
     `,
   };
-  return transporter.sendMail(mailOptions);
+  return sendMailHelper(mailOptions, email);
 };
 
 // ── Account Deleted Email ──────────────────────────────────────────────────
@@ -262,7 +278,40 @@ const sendAccountDeletedEmail = async (employeeData) => {
       </div>
     `,
   };
-  return transporter.sendMail(mailOptions);
+  return sendMailHelper(mailOptions, email);
+};
+
+// ── Forgot Password Email ──────────────────────────────────────────────────
+const sendForgotPasswordEmail = async (email, resetLink) => {
+  const mailOptions = {
+    from: `"Aurora Bank Support" <${process.env.EMAIL_USER}>`,
+    to: email,
+    subject: "Reset Your Aurora Bank Password",
+    html: `
+      <div style="margin:0;padding:0;background:#f4f7fa;font-family:'Segoe UI',Helvetica,Arial,sans-serif;">
+        <table border="0" cellpadding="0" cellspacing="0" width="100%">
+          <tr><td align="center" style="padding:40px 0;">
+            <table border="0" cellpadding="0" cellspacing="0" width="600" style="background:#ffffff;border-radius:16px;overflow:hidden;border:1px solid #eef2f7;">
+              <tr><td align="center" style="background:#1e293b;padding:30px 20px;">
+                <h1 style="color:#ffffff;margin:0;font-size:24px;font-weight:800;">Aurora Bank</h1>
+              </td></tr>
+              <tr><td style="padding:40px;">
+                <h2 style="color:#111827;margin:0 0 20px 0;font-size:20px;font-weight:700;">Password Reset Request</h2>
+                <p style="color:#4b5563;font-size:15px;line-height:1.6;">Hello, we received a request to reset the password for your Aurora Bank account.</p>
+                <p style="color:#4b5563;font-size:15px;line-height:1.6;">Click the button below to set a new password. This link will expire in 1 hour.</p>
+                <div style="text-align:center;margin:30px 0;">
+                  <a href="${resetLink}" style="background:#4f46e5;color:#ffffff;padding:14px 28px;border-radius:10px;text-decoration:none;font-weight:700;font-size:14px;display:inline-block;">Reset Password</a>
+                </div>
+                <p style="color:#6b7280;font-size:13px;">If you did not request a password reset, please ignore this email or contact support if you have concerns.</p>
+              </td></tr>
+              <tr><td style="padding:0 40px 30px;text-align:center;"><p style="color:#94a3b8;font-size:11px;margin:0;">© 2026 Aurora Bank Support Team.</p></td></tr>
+            </table>
+          </td></tr>
+        </table>
+      </div>
+    `,
+  };
+  return sendMailHelper(mailOptions, email);
 };
 
 module.exports = {
@@ -270,4 +319,5 @@ module.exports = {
   sendProfileUpdateEmail,
   sendStatusChangeEmail,
   sendAccountDeletedEmail,
+  sendForgotPasswordEmail,
 };

@@ -83,4 +83,8 @@ app.use("/admin", adminRoutes);
 app.get("/", (req, res) => res.send("Aurora Bank CBS Backend running!"));
 
 // Start server
-app.listen(PORT, () => console.log(`Server running on http://localhost:${PORT}`));
+if (process.env.NODE_ENV !== 'production') {
+  app.listen(PORT, () => console.log(`Server running on http://localhost:${PORT}`));
+}
+
+module.exports = app;

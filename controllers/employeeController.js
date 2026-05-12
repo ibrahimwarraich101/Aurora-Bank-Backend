@@ -79,14 +79,18 @@ const EmployeeController = {
         Details: `Employee ${name} created`
       });
 
-      // Send email in the background without awaiting it to make the API response faster
+      // Send email and wait for it to ensure it's processed
       const productionUrl = "https://bank-aurora.vercel.app";
-      sendEmployeeWelcomeEmail({ name, email, username, password }, productionUrl)
-        .catch(emailErr => console.error("Background email sending failed:", emailErr));
+      try {
+        await sendEmployeeWelcomeEmail({ name, email, username, password }, productionUrl);
+        console.log(`✅ Welcome email sent to ${email}`);
+      } catch (emailErr) {
+        console.error("❌ Welcome email failed:", emailErr.message);
+      }
 
       res.json({ 
         success: true, 
-        message: `Employee created successfully. A welcome email has been sent to ${email}.`, 
+        message: `Employee created successfully. ${email ? `A welcome email has been sent to ${email}.` : ''}`, 
         id: result._id 
       });
     } catch (err) {
@@ -126,9 +130,13 @@ const EmployeeController = {
         Details: `Employee ${id} updated`
       });
 
-      // Notify the employee of the update in the background
-      sendProfileUpdateEmail({ name: name || employee.name, email: email || employee.email }, { name, email, phone })
-        .catch(err => console.error("Update notification email failed:", err));
+      // Notify the employee of the update
+      try {
+        await sendProfileUpdateEmail({ name: name || employee.name, email: email || employee.email }, { name, email, phone });
+        console.log(`✅ Profile update email sent to ${email || employee.email}`);
+      } catch (err) {
+        console.error("❌ Update notification email failed:", err.message);
+      }
 
       res.json({ success: true, message: "Employee updated successfully" });
     } catch (err) {
@@ -157,9 +165,13 @@ const EmployeeController = {
         Details: `Employee ${employee.name} ${employee.is_active ? "activated" : "deactivated"}`
       });
 
-      // Notify the employee of their status change in the background
-      sendStatusChangeEmail({ name: employee.name, email: employee.email }, employee.is_active)
-        .catch(err => console.error("Status change email failed:", err));
+      // Notify the employee of their status change
+      try {
+        await sendStatusChangeEmail({ name: employee.name, email: employee.email }, employee.is_active);
+        console.log(`✅ Status change email sent to ${employee.email}`);
+      } catch (err) {
+        console.error("❌ Status change email failed:", err.message);
+      }
 
       res.json({ success: true, is_active: employee.is_active });
     } catch (err) {
@@ -187,9 +199,13 @@ const EmployeeController = {
         Details: `Employee ${employee.name} deleted`
       });
 
-      // Notify the employee their account has been deleted in the background
-      sendAccountDeletedEmail({ name: employee.name, email: employee.email })
-        .catch(err => console.error("Account deletion email failed:", err));
+      // Notify the employee their account has been deleted
+      try {
+        await sendAccountDeletedEmail({ name: employee.name, email: employee.email });
+        console.log(`✅ Account deletion email sent to ${employee.email}`);
+      } catch (err) {
+        console.error("❌ Account deletion email failed:", err.message);
+      }
 
       res.json({ success: true, message: "Employee deleted" });
     } catch (err) {
